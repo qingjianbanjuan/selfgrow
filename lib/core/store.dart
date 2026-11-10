@@ -23,12 +23,14 @@ class GameStore extends ChangeNotifier {
   DateTime? lastLoggedAt; // 上次记录时间
   DateTime? lastDecayAt; // 上次衰减结算
 
-  // AI 每日评价缓存（按 日期 + 记录数 失效）
+  // AI 每日评价缓存（按 日期 + 今日记录指纹 失效）
   String? commentHeadline;
   String? commentBody;
   List<String> commentHighlights = [];
   String? commentDate;
-  int commentLogCount = -1;
+
+  /// 生成时的记录指纹（比"条数"严格：增删换都算变化）
+  String? commentFingerprint;
   DateTime? commentAt;
 
   bool loaded = false;
@@ -185,7 +187,7 @@ class GameStore extends ChangeNotifier {
         commentHeadline = m['ch'] as String?;
         commentBody = m['cb'] as String?;
         commentDate = m['cd'] as String?;
-        commentLogCount = (m['cc'] as num?)?.toInt() ?? -1;
+        commentFingerprint = m['cf'] as String?;
         commentAt = _dt(m['ca']);
         final h = m['chl'];
         if (h is List) commentHighlights = h.map((e) => '$e').toList();
@@ -220,7 +222,7 @@ class GameStore extends ChangeNotifier {
           'cb': commentBody,
           'chl': commentHighlights,
           'cd': commentDate,
-          'cc': commentLogCount,
+          'cf': commentFingerprint,
           'ca': commentAt?.millisecondsSinceEpoch,
         }));
   }
@@ -417,15 +419,35 @@ class GameStore extends ChangeNotifier {
 
   // ---------------- AI 评价缓存 ----------------
 
+  /// 今天记录的指纹：条数 + 所有 id。任何增/删/换都会变。
+  String get todayFingerprint {
+    final list = logsToday;
+    if (list.isEmpty) return '0';
+    final ids = list.map((l) => l.id).toList()..sort();
+    return '${list.length}|${ids.join(',')}';
+  }
+
   bool get commentStale {
     if (commentBody == null || commentBody!.isEmpty) return true;
     if (commentDate != dayKey()) return true;
-    if (commentLogCount != todayCount) return true;
+    // 用指纹而不是条数：撤销一条再记一条，条数一样但内容不同
+    if (commentFingerprint != todayFingerprint) return true;
     final at = commentAt;
-    if (at != null && DateTime.now().difference(at) > const Duration(hours: 2)) {
+    if (at != null &&
+        DateTime.now().difference(at) > const Duration(minutes: 30)) {
       return true;
     }
     return false;
+  }
+
+  /// 距今多久（用于"生成于 x 分钟前"）
+  String get commentAgeText {
+    final at = commentAt;
+    if (at == null) return '';
+    final d = DateTime.now().difference(at);
+    if (d.inMinutes < 1) return '刚刚';
+    if (d.inHours < 1) return '${d.inMinutes} 分钟前';
+    return '${d.inHours} 小时前';
   }
 
   static String dayKey([DateTime? t]) {
@@ -442,7 +464,7 @@ class GameStore extends ChangeNotifier {
     commentBody = body;
     commentHighlights = highlights;
     commentDate = dayKey();
-    commentLogCount = todayCount;
+    commentFingerprint = todayFingerprint;
     commentAt = DateTime.now();
     await save();
     notifyListeners();

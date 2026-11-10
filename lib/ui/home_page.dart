@@ -347,7 +347,7 @@ class _Footer extends StatelessWidget {
 // ---------------------------------------------------------------- 今日陈述
 
 Future<void> showDailyComment(BuildContext context, GameStore store) async {
-  showModalBottomSheet(
+  await showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     builder: (_) => _CommentSheet(store: store),
@@ -369,10 +369,12 @@ class _CommentSheetState extends State<_CommentSheet> {
   @override
   void initState() {
     super.initState();
-    if (widget.store.commentStale) _generate();
+    // 打开就刷新。放到下一帧，避免在 initState 里同步 setState。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _generate());
   }
 
   Future<void> _generate() async {
+    if (!mounted) return;
     if (!AiConfig.hasKey) {
       setState(() => error = '还没填 DeepSeek Key，去设置里填一下');
       return;
@@ -413,8 +415,18 @@ class _CommentSheetState extends State<_CommentSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // 监听 store：记录一变化，面板立即跟着重建
+    return AnimatedBuilder(
+      animation: widget.store,
+      builder: (context, _) => _body(context),
+    );
+  }
+
+  Widget _body(BuildContext context) {
     final s = widget.store;
     final w = WeatherService.cached;
+    final hasContent = (s.commentBody ?? '').isNotEmpty;
+
     return Padding(
       padding: EdgeInsets.only(
         left: 20,
@@ -437,25 +449,54 @@ class _CommentSheetState extends State<_CommentSheet> {
                       style: const TextStyle(fontSize: 11, color: kSub)),
                 ),
               const Spacer(),
-              if (!s.commentStale)
-                IconButton(
-                  icon: const Icon(Icons.refresh, size: 18, color: kSub),
-                  onPressed: _generate,
-                  tooltip: '重新生成',
-                ),
+              // 刷新按钮常驻，不再藏在"过期才出现"的条件里
+              IconButton(
+                icon: const Icon(Icons.refresh, size: 18, color: kSub),
+                onPressed: loading ? null : _generate,
+                tooltip: '重新生成',
+              ),
               IconButton(
                 icon: const Icon(Icons.close, size: 18, color: kSub),
                 onPressed: () => Navigator.pop(context),
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          if (loading)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 30),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (error != null)
+
+          // 状态行：生成于 x / 更新中 / 还没有内容
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(
+              children: [
+                if (loading)
+                  const Row(
+                    children: [
+                      SizedBox(
+                        width: 11,
+                        height: 11,
+                        child: CircularProgressIndicator(strokeWidth: 1.6),
+                      ),
+                      SizedBox(width: 6),
+                      Text('更新中…',
+                          style: TextStyle(fontSize: 10.5, color: kSub)),
+                    ],
+                  )
+                else if (hasContent)
+                  Text(
+                    '生成于 ${s.commentAgeText}',
+                    style: TextStyle(
+                        fontSize: 10.5, color: kSub.withAlpha(190)),
+                  )
+                else
+                  const SizedBox.shrink(),
+                const Spacer(),
+                Text('今天 ${s.todayCount} 件事',
+                    style: TextStyle(
+                        fontSize: 10.5, color: kSub.withAlpha(160))),
+              ],
+            ),
+          ),
+
+          if (error != null && !hasContent)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 20),
               child: Row(
@@ -470,13 +511,24 @@ class _CommentSheetState extends State<_CommentSheet> {
                 ],
               ),
             )
-          else if (s.commentBody == null || s.commentBody!.isEmpty)
+          else if (!hasContent && loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 34),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (!hasContent)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Text('今天还没有记录，先记一件事吧',
                   style: TextStyle(color: kSub, fontSize: 13)),
             )
           else ...[
+            if (error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text('刷新失败：$error',
+                    style: const TextStyle(fontSize: 11, color: kDown)),
+              ),
             Text(
               s.commentHeadline ?? '',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
@@ -506,7 +558,7 @@ class _CommentSheetState extends State<_CommentSheet> {
                     .toList(),
               ),
             ],
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Text(
               'AI 只陈述，不评价、不建议',
               style: TextStyle(fontSize: 10.5, color: kSub.withAlpha(140)),
