@@ -141,7 +141,6 @@ class AiService {
     DateTime? now,
   }) async {
     final table = renderAttrTable(attrs, groups);
-    final usable = attrs.where((a) => a.enabled).map((a) => a.name).join('、');
 
     final usageLine = usage.isEmpty
         ? '（无）'
@@ -155,6 +154,7 @@ class AiService {
 $table
 
 【今天天气】${weather ?? '（未知）'}
+【手机使用】$usageLine
 
 【时间】${now ?? DateTime.now()}
 

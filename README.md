@@ -1,17 +1,133 @@
-# selfgrow
+# 养成自己（selfgrow）
 
-A new Flutter project.
+> 现实行为驱动的多维属性养成 App
+>
+> **它是镜子，不是教练。**
 
-## Getting Started
+---
 
-This project is a starting point for a Flutter application.
+## 这是什么
 
-A few resources to get you started if this is your first Flutter project:
+一个记录你真实生活、并把生活翻译成一组成长数值的 Android App。
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+- **养成对象是你自己**
+- **属性由现实行为驱动**：跑步 → 体力涨；熬夜 → 睡眠掉
+- **纯数值**，没有剧情、没有美术负担
+- **AI 判定**：你只说"刚才在干什么"，它判断影响哪些属性、涨多少、跌多少
+- **属性能自己加**：生活里的方面数不完，所以属性是数据，不是写死的常量
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 它不是什么
+
+| 它不做 | 原因 |
+|---|---|
+| 不设目标 | 不是计划工具 |
+| 不督促、不催促 | 不是自律教练 |
+| 不给建议 | 只呈现事实 |
+| 不做因果判断 | "今天没运动" ✓ / "因为懒所以没运动" ✗ |
+| 不做成就/连击奖励 | 会变成压力来源 |
+
+**属性下降 = 事实陈述，不是惩罚。**
+
+---
+
+## 核心机制
+
+### 1. 属性是可编辑的数据
+
+默认种子 **8 组 37 个属性**（身体 / 头脑 / 语言 / 技能 / 社交 / 情绪 / 生活 / 审美），
+包含英语、编程、卫生等。全部可增删改，也可以新建分组。
+
+### 2. 两种衰减
+
+| 模式 | 规则 | 用于 |
+|---|---|---|
+| **状态型**（`decayAlways = true`） | 每天固定衰减 | 卫生、睡眠、体力、心情、专注 |
+| **积累型**（`decayAlways = false`） | 当天有正向增长就不衰减，否则衰减 | 英语、编程、力量、阅读 |
+
+### 3. AI 判定
+
+```
+你的一句话 → AI 读当前完整属性表 → 输出对已有属性的增减
+                                  + 必要时建议新建属性
+```
+
+没网 / 没填 Key 时走**离线关键词规则**兜底。
+
+### 4. 时间线追问
+
+```
+上一条记录结束 → 现在
+   < 30 分钟  → 不问
+  ≥ 30 分钟  → 弹出「这段时间你在干什么？」
+             附带手机使用摘要（若已授权）
+```
+
+### 5. 每日陈述（AI 生成）
+
+范围固定为**今天 4:00 到现在**（凌晨记的算前一天），随时可查。
+措辞受硬规则约束：只陈述、不评价、不建议、不推断因果。
+
+---
+
+## 技术栈
+
+| 层 | 选型 |
+|---|---|
+| UI | Flutter（Android） |
+| 状态 | `ChangeNotifier` |
+| 存储 | `shared_preferences`（JSON） |
+| AI | DeepSeek `deepseek-chat`（Key 由用户在 App 内填写，不进仓库） |
+| 使用统计 | `usage_stats`（需授权「使用情况访问权限」） |
+| 构建 | 腾讯 Gradle 镜像 + 阿里云 Maven（适配国内网络） |
+
+---
+
+## 目录
+
+```
+lib/
+├── main.dart
+└── core/
+    ├── models.dart    属性 / 分组 / 行为 / 记录 / AI 结果
+    ├── presets.dart   37 个属性种子 + 18 个预设行为 + 衰减值
+    ├── store.dart     状态 + 持久化 + 衰减结算 + 追问节流
+    └── ai.dart        事件判定 + 每日陈述 + 离线兜底
+```
+
+---
+
+## 版本
+
+| 版本 | 内容 | 状态 |
+|---|---|---|
+| v0.1.0 | 数据层：属性/分组/行为/记录/衰减 | ✅ |
+| v0.2.0 | AI 判定层：事件翻译 + 每日陈述 + 离线兜底 | ✅ |
+| v0.3.0 | 主界面：属性栏 + 小人 + 时间轴 | ⏳ |
+| v0.4.0 | 手机使用统计 + 追问节流 | ⏳ |
+| v0.5.0 | 属性管理页 | ⏳ |
+| v1.0.0 | 天气 + 打包 APK | ⏳ |
+
+详见 [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
+## 构建
+
+```bash
+flutter pub get
+flutter build apk --release
+```
+
+产物：`build/app/outputs/flutter-apk/app-release.apk`
+
+---
+
+## 隐私
+
+- 所有数据**只存本地**，不上传
+- 手机使用统计仅用于判断"这段时间你在干什么"，只把聚合摘要发给 AI
+- API Key 存本地，不进版本库
+
+## 许可
+
+个人项目，未指定开源许可。
