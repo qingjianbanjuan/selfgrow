@@ -5,7 +5,6 @@ import '../core/models.dart';
 import '../core/store.dart';
 import '../core/usage.dart';
 import 'ask_sheet.dart';
-import 'record_sheet.dart';
 import 'theme.dart';
 
 Future<void> showSettingsSheet(BuildContext context, GameStore store) {
@@ -65,16 +64,13 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         hasPerm ? await UsageService.recent(since: since) : <AppUsageBrief>[];
     if (!host.mounted) return;
 
-    final text = await showAskSheet(
+    await showAskSheet(
       host,
       widget.store,
       since: since,
       usage: usage,
       hasUsagePermission: hasPerm,
     );
-    if (text == null || text.trim().isEmpty) return;
-    if (!host.mounted) return;
-    showRecordSheet(host, widget.store, initialText: text, autoJudge: true);
   }
 
   @override

@@ -29,6 +29,14 @@ Future<void> main() async {
 
   // 自检：确认使用统计能读到数据（结果打到 logcat）
   _selfCheckUsage();
+  // 打开 App 的第一件事：先查「上次记录到现在」的手机使用记录（预取）。
+  // 这样追问弹窗能立刻把使用明细摆出来，不用等查询。
+  final askSince = store.askSince;
+  if (store.shouldAsk && askSince != null) {
+    debugPrint('[selfgrow] 预取使用记录：$askSince -> now');
+    UsageService.prefetch(since: askSince);
+  }
+  _selfCheckAi(store);
 
   runApp(SelfGrowApp(store: store));
 }
@@ -65,4 +73,55 @@ Future<void> _selfCheckUsage() async {
   } catch (e) {
     debugPrint('[selfgrow] usage check failed: $e');
   }
+}
+/// 启动自检：确认 AI 这条链路通不通（结果打到 logcat）
+Future<void> _selfCheckAi(GameStore store) async {
+  debugPrint('[selfgrow] === AI 自检 ===');
+  debugPrint('[selfgrow] key filled = ${AiConfig.hasKey}'
+      ' (长度 ${AiConfig.apiKey.length})');
+  debugPrint('[selfgrow] model = ${AiConfig.model}');
+  debugPrint('[selfgrow] key 前6位 = ${AiConfig.apiKey.length >= 6 ? AiConfig.apiKey.substring(0, 6) : "(太短)"}');
+  if (!AiConfig.hasKey) {
+    debugPrint('[selfgrow] 没填 Key，跳过');
+    return;
+  }
+
+  final c = await AiService.dailyComment(
+    todayLogs: store.logsToday,
+    attrs: store.attrs,
+    groups: store.groups,
+    weather: WeatherService.cached?.forAi,
+  );
+  if (c == null) {
+    debugPrint('[selfgrow] dailyComment = NULL（失败）');
+  } else {
+    debugPrint('[selfgrow] dailyComment OK');
+    debugPrint('[selfgrow]   headline = "${c.headline}"');
+    debugPrint('[selfgrow]   body     = "${c.body}"');
+    debugPrint('[selfgrow]   highlights = ${c.highlights}');
+  }
+
+  // 验证「事件性质 × 时长」是否真的影响判定：
+  // 同一件事（打游戏），30 分钟 vs 5 小时，delta 应该差很多
+  for (final hours in [0.5, 5.0]) {
+    final d = Duration(minutes: (hours * 60).round());
+    final j = await AiService.judge(
+      text: '打游戏',
+      attrs: store.attrs,
+      groups: store.groups,
+      duration: d,
+    );
+    if (j == null) {
+      debugPrint('[selfgrow] judge(${hours}h) = NULL');
+      continue;
+    }
+    final eff = j.effects.map((e) {
+      final name = store.attr(e.attrId)?.name ?? e.attrId;
+      return '$name${e.delta >= 0 ? '+' : ''}${e.delta}';
+    }).join(' ');
+    debugPrint('[selfgrow] judge(打游戏 ${hours}h) -> "${j.summary}"'
+        ' [${j.durationText}] : $eff');
+  }
+
+  debugPrint('[selfgrow] === 自检结束 ===');
 }

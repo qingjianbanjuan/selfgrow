@@ -10,6 +10,7 @@ Future<void> showRecordSheet(
   BuildContext context,
   GameStore store, {
   String? initialText,
+  Duration? duration,
   bool autoJudge = false,
 }) {
   return showModalBottomSheet(
@@ -18,6 +19,7 @@ Future<void> showRecordSheet(
     builder: (_) => _RecordSheet(
       store: store,
       initialText: initialText,
+      duration: duration,
       autoJudge: autoJudge,
     ),
   );
@@ -26,11 +28,15 @@ Future<void> showRecordSheet(
 class _RecordSheet extends StatefulWidget {
   final GameStore store;
   final String? initialText;
+
+  /// 这件事持续了多久（追问流程会带上时间窗口）
+  final Duration? duration;
   final bool autoJudge;
 
   const _RecordSheet({
     required this.store,
     this.initialText,
+    this.duration,
     this.autoJudge = false,
   });
 
@@ -130,6 +136,7 @@ class _RecordSheetState extends State<_RecordSheet> {
       text: text,
       attrs: widget.store.attrs,
       groups: widget.store.groups,
+      duration: widget.duration,
     );
     if (!mounted) return;
     setState(() {
@@ -187,6 +194,7 @@ class _RecordSheetState extends State<_RecordSheet> {
       text: _previewRaw ?? '',
       attrs: widget.store.attrs,
       groups: widget.store.groups,
+      duration: widget.duration,
     );
     if (!mounted) return;
     setState(() {
@@ -431,6 +439,24 @@ class _RecordSheetState extends State<_RecordSheet> {
                     style: const TextStyle(
                         fontSize: 14, fontWeight: FontWeight.w600)),
               ),
+              // 显示 AI 采用的时长：影响幅度就是按它算的
+              if (j.durationText.isNotEmpty)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: kBg.withAlpha(120),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.schedule, size: 11, color: kSub),
+                      const SizedBox(width: 3),
+                      Text(j.durationText,
+                          style: const TextStyle(fontSize: 10.5, color: kSub)),
+                    ],
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 10),

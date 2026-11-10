@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -72,12 +73,24 @@ class AiService {
             }),
           )
           .timeout(_timeout);
-      if (resp.statusCode != 200) return null;
+
+      if (resp.statusCode != 200) {
+        // 不要再静默失败：把状态码和响应体打出来
+        final body = utf8.decode(resp.bodyBytes);
+        debugPrint('[selfgrow] ai HTTP ${resp.statusCode} -> '
+            '${body.length > 400 ? body.substring(0, 400) : body}');
+        return null;
+      }
+
       final j = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
       final content =
           (j['choices'] as List).first['message']['content'] as String;
-      return _stripFence(content);
-    } catch (_) {
+      final stripped = _stripFence(content);
+      debugPrint('[selfgrow] ai raw content (${stripped.length} chars): '
+          '${stripped.length > 300 ? stripped.substring(0, 300) : stripped}');
+      return stripped;
+    } catch (e) {
+      debugPrint('[selfgrow] ai exception: $e');
       return null;
     }
   }
@@ -131,7 +144,8 @@ class AiService {
 
   // ---------------- 事件判定 ----------------
 
-  /// [worth_recording] 为 false 时不建议记录
+  /// [worth_recording] 为 false 时仍然保留 effects（用户已明确要记录）
+  /// [duration] 这件事持续了多久；未知时由 AI 自己估计
   static Future<AiJudgement?> judge({
     required String text,
     required List<Attribute> attrs,
@@ -139,12 +153,22 @@ class AiService {
     List<AppUsageBrief> usage = const [],
     String? weather,
     DateTime? now,
+    Duration? duration,
   }) async {
     final table = renderAttrTable(attrs, groups);
 
     final usageLine = usage.isEmpty
         ? '（无）'
         : usage.take(8).map((u) => u.label).join('、');
+
+    String durText;
+    if (duration != null && duration.inMinutes > 0) {
+      durText = duration.inHours > 0
+          ? '${duration.inHours} 小时 ${duration.inMinutes % 60} 分'
+          : '${duration.inMinutes} 分钟';
+    } else {
+      durText = '未知 —— 你要自己估计一个合理时长';
+    }
 
     final system = '''
 你是「现实生活 → 属性数值」的翻译器。把用户描述的真实经历，翻译成对现有属性的数值增减。
@@ -155,21 +179,28 @@ $table
 
 【今天天气】${weather ?? '（未知）'}
 【手机使用】$usageLine
-
 【时间】${now ?? DateTime.now()}
+【这件事持续了多久】$durText
 
 规则：
 1. 只输出 JSON，不要任何解释文字
 2. effects[].attr 必须严格取自上面属性表，用中文名；匹配不上的不要硬塞
-3. delta 是整数，范围 -30 到 +30
-4. 一次事件影响 1-5 个属性，不要把所有属性都列上
-5. 负面后果必须如实输出：运动后卫生下降、熬夜后体力下降、久坐后体力下降等
-6. 若事件涉及某个重要方面但属性表里完全没有对应，放进 suggest_attrs（最多 2 个）
-7. summary ≤ 15 字；emoji 一个字符
-8. worth_recording：这件事是否值得进时间轴。琐碎到（"刷了 5 分钟手机"）填 false
+3. **影响幅度必须按「事件性质 × 持续时长」自己算**，不要给固定值。
+   同样一件事，10 分钟和 5 小时的影响差别很大。参考量级：
+   - 专注 / 意志 / 心情 这类状态：约 ±1~3 每小时（刷视频这类被动消耗更低，深度学习更高）
+   - 体力 / 卫生：约 ±2~12 每小时（运动消耗大，睡觉恢复大）
+   - 能力型（英语/编程/阅读…）：约 +3~10 每小时，且**只加在真的在练的那项上**
+4. delta 整数，范围 -40 到 +40；超过 3 小时的事件可以更大
+5. 一次事件影响 1-6 个属性，不要把所有属性都列上
+6. 负面后果必须如实输出：运动后卫生下降、熬夜后体力下降、久坐后体力下降、
+   长时间打游戏后专注和体力下降但心情上升等
+7. 若事件涉及某个重要方面但属性表里完全没有对应，放进 suggest_attrs（最多 2 个）
+8. summary ≤ 15 字；emoji 一个字符
+9. worth_recording：只标记这件事是否琐碎，**不影响 effects 的计算**
+10. 输出 duration_minutes：你实际采用的事件时长（整数分钟）
 
 输出格式：
-{"summary":"跑步30分钟","emoji":"🏃","worth_recording":true,
+{"summary":"跑步30分钟","emoji":"🏃","duration_minutes":30,"worth_recording":true,
  "effects":[{"attr":"体力","delta":8},{"attr":"卫生","delta":-8}],
  "suggest_attrs":[{"name":"卫生","group":"身体","emoji":"🧼","init_exp":10}]}
 ''';
@@ -179,14 +210,12 @@ $table
 
     try {
       final j = jsonDecode(content) as Map<String, dynamic>;
+      // 注意：AI 判断"不值得记"(worth_recording=false) 时**仍然保留 effects**。
+      // 用户已经明确要记录，不该替他丢掉 —— 否则会以为记上了、其实没记。
       final worth = j['worth_recording'];
       if (worth is bool && !worth) {
-        return AiJudgement(
-          effects: const [],
-          summary: (j['summary'] ?? '').toString(),
-          emoji: (j['emoji'] ?? '•').toString(),
-          reasoning: 'worth_recording=false',
-        );
+        debugPrint('[selfgrow] judge: worth_recording=false，但仍保留 '
+            '${(j['effects'] as List? ?? []).length} 条变化');
       }
       final effects = <Effect>[];
       for (final e in (j['effects'] as List? ?? [])) {
@@ -206,11 +235,17 @@ $table
         if (attrs.any((a) => a.name == n)) continue;
         sugg.add(SuggestedAttr.fromJson(m));
       }
+      final durMin = (j['duration_minutes'] as num?)?.toInt();
+      final effDur = duration ??
+          ((durMin != null && durMin > 0)
+              ? Duration(minutes: durMin)
+              : null);
       return AiJudgement(
         effects: effects,
         summary: (j['summary'] ?? text).toString(),
         emoji: (j['emoji'] ?? '🤖').toString(),
         suggestions: sugg,
+        duration: effDur,
       );
     } catch (_) {
       return offlineJudge(text, attrs);
@@ -361,7 +396,8 @@ $table
         (j['body'] ?? '').toString(),
         h,
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[selfgrow] dailyComment JSON parse failed: $e');
       return null;
     }
   }

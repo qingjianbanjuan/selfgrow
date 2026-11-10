@@ -404,12 +404,29 @@ class GameStore extends ChangeNotifier {
   }
 
   bool get shouldAsk {
+    if (lastLoggedAt == null) return false;
     if (sinceLastEvent < const Duration(minutes: 30)) return false;
     final asked = lastAskedAt;
-    if (asked != null && DateTime.now().difference(asked) < const Duration(minutes: 30)) {
+    if (asked != null &&
+        DateTime.now().difference(asked) < const Duration(minutes: 30)) {
       return false;
     }
     return true;
+  }
+
+  /// 追问的起点 = 上一条记录的时间（最多回溯 12 小时）
+  DateTime? get askSince {
+    final last = lastLoggedAt;
+    if (last == null) return null;
+    final maxGap = DateTime.now().subtract(const Duration(hours: 12));
+    return last.isBefore(maxGap) ? maxGap : last;
+  }
+
+  /// 从起点到现在过了多久
+  Duration? get askGap {
+    final s = askSince;
+    if (s == null) return null;
+    return DateTime.now().difference(s);
   }
 
   Future<void> markAsked() async {

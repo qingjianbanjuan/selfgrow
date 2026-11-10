@@ -305,13 +305,28 @@ class AiJudgement {
   final String emoji;
   final String? reasoning;
 
+  /// 这件事持续了多久（AI 估计或调用方给出）
+  final Duration? duration;
+
   AiJudgement({
     required this.effects,
     required this.summary,
     this.suggestions = const [],
     this.emoji = '🤖',
     this.reasoning,
+    this.duration,
   });
+
+  /// "2 小时 15 分" / "45 分钟"
+  String get durationText {
+    final d = duration;
+    if (d == null || d.inMinutes <= 0) return '';
+    if (d.inHours > 0) {
+      final m = d.inMinutes % 60;
+      return m > 0 ? '${d.inHours} 小时 $m 分' : '${d.inHours} 小时';
+    }
+    return '${d.inMinutes} 分钟';
+  }
 }
 
 /// 手机使用摘要（给 AI 用）

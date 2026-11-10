@@ -42,33 +42,25 @@ class _HomePageState extends State<HomePage> {
     _askedThisLaunch = true;
     final store = widget.store;
     if (!store.loaded) return;
-    // 从来没记录过，就不打扰
-    if (store.lastLoggedAt == null) return;
     if (!store.shouldAsk) return;
 
-    // 距上一条记录超过 12 小时，就按 12 小时算（避免"3 天前"这种怪话）
-    var since = store.lastLoggedAt!;
-    final maxGap = DateTime.now().subtract(const Duration(hours: 12));
-    if (since.isBefore(maxGap)) since = maxGap;
+    final since = store.askSince;
+    if (since == null) return;
 
+    // 启动时已经预取过，这里直接拿（几乎立即返回）
     final hasPerm = await UsageService.hasPermission();
     final usage =
-        hasPerm ? await UsageService.recent(since: since) : <AppUsageBrief>[];
+        hasPerm ? await UsageService.prefetch(since: since) : <AppUsageBrief>[];
     if (!mounted) return;
 
-    final text = await showAskSheet(
+    // 面板自己会：自动判定手机那段 → 直接记上 → 只问手机之外的时间
+    await showAskSheet(
       context,
       store,
       since: since,
       usage: usage,
       hasUsagePermission: hasPerm,
     );
-    if (!mounted || text == null || text.trim().isEmpty) return;
-
-    await store.markAsked();
-    if (!mounted) return;
-    // 直接走 AI 判定 + 预览确认
-    showRecordSheet(context, store, initialText: text, autoJudge: true);
   }
 
   /// 状态：心情 / 睡眠 / 体力 的平均
