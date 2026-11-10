@@ -9,8 +9,9 @@ import 'theme.dart';
 /// 打开 App 时的处理面板。
 ///
 /// 原则：**能自己判断的就不问**。
-/// - 手机使用记录 → 直接让 AI 判定并记上，只把结果摆给你看
-/// - 手机之外的时间（睡觉/吃饭/上课…）→ 这部分它不知道，才问你
+/// - 有明确的前台应用 → 直接让 AI 判定并记上，只把结果摆出来
+/// - **只在听歌（没碰别的 App）** → 听歌说明不了在干什么，这时候才问
+/// - 手机之外的时间（睡觉/吃饭/上课）→ 它不知道，问
 Future<void> showAskSheet(
   BuildContext context,
   GameStore store, {
@@ -60,8 +61,10 @@ class _AskSheetState extends State<_AskSheet> {
   @override
   void initState() {
     super.initState();
-    // 一进来就自动判定手机使用那段，不用人催
-    WidgetsBinding.instance.addPostFrameCallback((_) => _judgeUsage());
+    // 只有"有明确前台应用"时才自动判定；纯听歌判定不了，要等人回答
+    if (!_musicOnly) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _judgeUsage());
+    }
   }
 
   @override
@@ -71,11 +74,36 @@ class _AskSheetState extends State<_AskSheet> {
   }
 
   Duration get _gap => DateTime.now().difference(widget.since);
-  Duration get _usageTotal => UsageService.totalOf(widget.usage);
+
+  /// 非背景的应用（真的在"用手机"）
+  List<AppUsageBrief> get _screenApps =>
+      widget.usage.where((u) => !u.isBackground).toList();
+
+  /// 听歌类（背景播放）
+  List<AppUsageBrief> get _musicApps =>
+      widget.usage.where((u) => u.isBackground).toList();
+
+  /// 只听了歌，没碰别的 App
+  bool get _musicOnly => _screenApps.isEmpty && _musicApps.isNotEmpty;
+
+  Duration _sum(List<AppUsageBrief> list) {
+    var ms = 0;
+    for (final u in list) {
+      ms += u.duration.inMilliseconds;
+    }
+    return Duration(milliseconds: ms);
+  }
+
+  Duration get _screenTotal => _sum(_screenApps);
+  Duration get _musicTotal => _sum(_musicApps);
+
+  /// 手机外的时间 = 总窗口 - 手机上真正在用的时间
   Duration get _offPhoneGap {
-    final d = _gap - _usageTotal;
+    final d = _gap - _screenTotal - _musicTotal;
     return d.isNegative ? Duration.zero : d;
   }
+
+  String get _musicName => _musicApps.isEmpty ? '音乐' : _musicApps.first.appName;
 
   String get _sinceText =>
       '${widget.since.hour.toString().padLeft(2, '0')}:${widget.since.minute.toString().padLeft(2, '0')}';
@@ -87,17 +115,28 @@ class _AskSheetState extends State<_AskSheet> {
     return m > 0 ? '$h 小时 $m 分' : '$h 小时';
   }
 
-  String get _usageText => widget.usage.map((u) => u.label).join('、');
+  /// 给 AI 的描述文本
+  String get _usageText {
+    final parts = <String>[];
+    if (_screenApps.isNotEmpty) {
+      parts.add('手机使用：${_screenApps.map((u) => u.label).join('、')}');
+    }
+    if (_musicApps.isNotEmpty) {
+      parts.add('同时背景播放：${_musicApps.map((u) => u.label).join('、')}'
+          '（边听边做事，不算刷手机）');
+    }
+    return parts.isEmpty ? '这段时间没有手机使用记录' : parts.join('；');
+  }
 
-  /// 自动判定手机使用这段时间
+  /// 自动判定有明确前台应用的那段
   Future<void> _judgeUsage() async {
-    if (widget.usage.isEmpty) return;
+    if (_screenApps.isEmpty) return;
     setState(() {
       _judging = true;
       _error = null;
     });
     final j = await AiService.judge(
-      text: '这段时间手机使用：$_usageText',
+      text: _usageText,
       attrs: widget.store.attrs,
       groups: widget.store.groups,
       duration: _gap,
@@ -110,9 +149,8 @@ class _AskSheetState extends State<_AskSheet> {
     });
   }
 
-  /// 应用一条判定
-  Future<bool> _apply(AiJudgement j, String? rawText) async {
-    if (j.effects.isEmpty) return false;
+  Future<void> _apply(AiJudgement j, String? rawText) async {
+    if (j.effects.isEmpty) return;
     await widget.store.applyEffects(
       label: j.summary,
       emoji: j.emoji,
@@ -121,33 +159,59 @@ class _AskSheetState extends State<_AskSheet> {
       rawText: rawText,
       summary: j.summary,
     );
-    return true;
   }
 
-  /// 主操作：把手机使用那段记上；如果填了文字，再判一次那段
-  Future<void> _commit({bool withText = true}) async {
+  /// 主操作
+  Future<void> _commit() async {
     if (_working) return;
-    setState(() => _working = true);
 
-    var count = 0;
+    final typed = _ctrl.text.trim();
 
-    // 1) 手机使用那段
-    final uj = _usageJudge;
-    if (uj != null && uj.effects.isNotEmpty) {
-      if (await _apply(uj, _usageText)) count++;
+    // 纯听歌场景：必须知道在干什么，否则记了也没意义
+    if (_musicOnly && typed.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('选一个，或者说一句你在干嘛'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
     }
 
-    // 2) 用户补充的那句
-    final extra = withText ? _ctrl.text.trim() : '';
-    if (extra.isNotEmpty) {
+    setState(() => _working = true);
+    var count = 0;
+
+    if (_musicOnly) {
+      // 听歌 + 用户说的活动 → 一起交给 AI 判定
       final j = await AiService.judge(
-        text: extra,
+        text: '边听 $_musicName（${_fmt(_musicTotal)}），$typed',
         attrs: widget.store.attrs,
         groups: widget.store.groups,
-        duration: _offPhoneGap.inMinutes > 1 ? _offPhoneGap : null,
+        duration: _gap,
       );
       if (j != null && j.effects.isNotEmpty) {
-        if (await _apply(j, extra)) count++;
+        await _apply(j, typed);
+        count++;
+      }
+    } else {
+      // 1) 有明确前台应用的自动判定
+      final uj = _usageJudge;
+      if (uj != null && uj.effects.isNotEmpty) {
+        await _apply(uj, _usageText);
+        count++;
+      }
+      // 2) 用户补充的（手机之外）
+      if (typed.isNotEmpty) {
+        final j = await AiService.judge(
+          text: typed,
+          attrs: widget.store.attrs,
+          groups: widget.store.groups,
+          duration: _offPhoneGap.inMinutes > 1 ? _offPhoneGap : null,
+        );
+        if (j != null && j.effects.isNotEmpty) {
+          await _apply(j, typed);
+          count++;
+        }
       }
     }
 
@@ -159,27 +223,30 @@ class _AskSheetState extends State<_AskSheet> {
     messenger.showSnackBar(SnackBar(
       duration: const Duration(seconds: 3),
       content: Text(
-        count > 0
-            ? '已记下 $count 条（${_fmt(_gap)}）'
-            : '这段时间没有产生属性变化',
+        count > 0 ? '已记下 $count 条（${_fmt(_gap)}）' : '这段时间没有产生属性变化',
         style: const TextStyle(fontSize: 13),
       ),
     ));
   }
 
-  /// 快速选项：手机之外在干什么
-  List<String> get _offPhoneGuesses {
-    final g = <String>['在睡觉', '在吃饭', '在上课', '在运动', '在外面逛'];
-    if (widget.usage.isEmpty) {
-      g.insertAll(0, ['在刷视频', '在打游戏', '在学习']);
-    }
-    return g.take(6).toList();
+  Future<void> _skip() async {
+    await widget.store.markAsked();
+    if (mounted) Navigator.pop(context);
   }
+
+  /// 纯听歌时问：边听歌在干什么
+  List<String> get _activityGuesses =>
+      const ['在写代码', '在看书', '在通勤', '在打游戏', '在发呆', '在聊天'];
+
+  /// 有前台应用时问：手机之外在干什么
+  List<String> get _offPhoneGuesses =>
+      const ['在睡觉', '在吃饭', '在上课', '在运动', '在外面逛'];
 
   @override
   Widget build(BuildContext context) {
     final hasUsage = widget.hasUsagePermission && widget.usage.isNotEmpty;
-    final offMin = _offPhoneGap.inMinutes;
+    final askOffPhone = !_musicOnly && (_offPhoneGap.inMinutes >= 15 || !hasUsage);
+    final guesses = _musicOnly ? _activityGuesses : _offPhoneGuesses;
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
@@ -193,30 +260,39 @@ class _AskSheetState extends State<_AskSheet> {
               // ---------- 标题 ----------
               Text(
                 '$_sinceText 之后到现在（${_fmt(_gap)}）',
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w600),
+                style:
+                    const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 4),
               Text(
-                hasUsage
-                    ? '手机上这段我自己判断，不用你说了'
-                    : '这段时间手机上没查到记录',
+                !widget.hasUsagePermission
+                    ? '没授权使用情况，只能问你了'
+                    : _musicOnly
+                        ? '这段时间只开着 $_musicName，没碰别的 App'
+                        : hasUsage
+                            ? '手机上这段我自己判断，不用你说了'
+                            : '这段时间手机上没查到记录',
                 style: TextStyle(fontSize: 11, color: kSub.withAlpha(190)),
               ),
               const SizedBox(height: 14),
 
-              // ---------- 手机使用（已自动判定，只展示）----------
+              // ---------- 使用情况 ----------
               if (!widget.hasUsagePermission) ...[
                 _permHint(),
                 const SizedBox(height: 14),
               ] else if (hasUsage) ...[
-                _UsageBlock(
-                  usage: widget.usage,
-                  total: _usageTotal,
-                  judge: _usageJudge,
-                  judging: _judging,
-                  attrs: widget.store.attrs,
-                ),
+                if (_musicOnly)
+                  _MusicOnlyBlock(music: _musicApps, total: _musicTotal)
+                else
+                  _UsageBlock(
+                    screen: _screenApps,
+                    music: _musicApps,
+                    screenTotal: _screenTotal,
+                    musicTotal: _musicTotal,
+                    judge: _usageJudge,
+                    judging: _judging,
+                    attrs: widget.store.attrs,
+                  ),
                 if (_error != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -226,19 +302,21 @@ class _AskSheetState extends State<_AskSheet> {
                 const SizedBox(height: 14),
               ],
 
-              // ---------- 手机之外（这部分它不知道，才问）----------
-              if (offMin >= 15 || !hasUsage) ...[
+              // ---------- 询问 ----------
+              if (_musicOnly || askOffPhone) ...[
                 Text(
-                  hasUsage
-                      ? '其余 ${_fmt(_offPhoneGap)} 没有手机记录，在干什么？（可不填）'
-                      : '这段时间在干什么？',
+                  _musicOnly
+                      ? '只是听歌判断不了在做什么，你在干嘛？'
+                      : (hasUsage
+                          ? '其余 ${_fmt(_offPhoneGap)} 没有手机记录，在干什么？（可不填）'
+                          : '这段时间在干什么？'),
                   style: const TextStyle(fontSize: 12, color: kSub),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: _offPhoneGuesses
+                  children: guesses
                       .map((g) => InkWell(
                             borderRadius: BorderRadius.circular(9),
                             onTap: () {
@@ -264,8 +342,10 @@ class _AskSheetState extends State<_AskSheet> {
                   maxLines: 2,
                   minLines: 1,
                   style: const TextStyle(fontSize: 14),
-                  decoration: const InputDecoration(
-                    hintText: '或者说一句，比如「在图书馆看了两小时书」',
+                  decoration: InputDecoration(
+                    hintText: _musicOnly
+                        ? '或者说一句，比如「边听歌边写了会儿代码」'
+                        : '或者说一句，比如「在图书馆看了两小时书」',
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -276,12 +356,7 @@ class _AskSheetState extends State<_AskSheet> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _working
-                          ? null
-                          : () async {
-                              await widget.store.markAsked();
-                              if (context.mounted) Navigator.pop(context);
-                            },
+                      onPressed: _working ? null : _skip,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: kSub,
                         side: const BorderSide(color: kSurface2),
@@ -294,7 +369,7 @@ class _AskSheetState extends State<_AskSheet> {
                   Expanded(
                     flex: 2,
                     child: FilledButton(
-                      onPressed: _working || _judging ? null : () => _commit(),
+                      onPressed: _working || _judging ? null : _commit,
                       style: FilledButton.styleFrom(
                         backgroundColor: kAccent,
                         padding: const EdgeInsets.symmetric(vertical: 13),
@@ -306,7 +381,9 @@ class _AskSheetState extends State<_AskSheet> {
                               child: CircularProgressIndicator(
                                   strokeWidth: 2, color: Colors.white))
                           : Text(
-                              hasUsage && _usageJudge != null ? '就这样记' : '记上',
+                              _musicOnly
+                                  ? '记上'
+                                  : (_usageJudge != null ? '就这样记' : '记上'),
                               style: const TextStyle(fontSize: 14),
                             ),
                     ),
@@ -348,28 +425,124 @@ class _AskSheetState extends State<_AskSheet> {
   }
 }
 
-// ---------------------------------------------------------------- 手机使用区块
+// ---------------------------------------------------------------- 共用
+
+String _m(Duration d) {
+  if (d.inMinutes < 60) return '${d.inMinutes}m';
+  final m = d.inMinutes % 60;
+  return m > 0 ? '${d.inHours}h${m}m' : '${d.inHours}h';
+}
+
+double _maxMs(List<AppUsageBrief> list) =>
+    list.isEmpty ? 1.0 : list.first.duration.inMilliseconds.toDouble();
+
+Widget _barRow(AppUsageBrief u, double maxMs, {bool dim = false}) {
+  final ratio = (u.duration.inMilliseconds / maxMs).clamp(0.04, 1.0);
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Row(
+      children: [
+        SizedBox(
+          width: 92,
+          child: Text(
+            u.appName,
+            style: TextStyle(fontSize: 12, color: dim ? kSub : kText),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: ratio,
+              minHeight: 4,
+              backgroundColor: kBg,
+              valueColor:
+                  AlwaysStoppedAnimation(dim ? kSub.withAlpha(120) : kAccent),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 46,
+          child: Text(
+            _m(u.duration),
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontSize: 11, color: kSub),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// ---------------------------------------------------------------- 纯听歌
+
+class _MusicOnlyBlock extends StatelessWidget {
+  final List<AppUsageBrief> music;
+  final Duration total;
+
+  const _MusicOnlyBlock({required this.music, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    final maxMs = _maxMs(music);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: kSurface2,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.headphones, size: 14, color: kSub),
+              const SizedBox(width: 6),
+              const Text('一直在听', style: TextStyle(fontSize: 11.5, color: kSub)),
+              const Spacer(),
+              Text(
+                _m(total),
+                style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: kText),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          ...music.take(3).map((u) => _barRow(u, maxMs, dim: true)),
+          const SizedBox(height: 4),
+          const Divider(color: kBg, height: 14),
+          const Text('听歌本身判断不了在做什么，所以下面问你一句',
+              style: TextStyle(fontSize: 11, color: kSub)),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- 常规
 
 class _UsageBlock extends StatelessWidget {
-  final List<AppUsageBrief> usage;
-  final Duration total;
+  final List<AppUsageBrief> screen;
+  final List<AppUsageBrief> music;
+  final Duration screenTotal;
+  final Duration musicTotal;
   final AiJudgement? judge;
   final bool judging;
   final List<Attribute> attrs;
 
   const _UsageBlock({
-    required this.usage,
-    required this.total,
+    required this.screen,
+    required this.music,
+    required this.screenTotal,
+    required this.musicTotal,
     required this.judge,
     required this.judging,
     required this.attrs,
   });
-
-  String _fmt(Duration d) {
-    if (d.inMinutes < 60) return '${d.inMinutes}m';
-    final m = d.inMinutes % 60;
-    return m > 0 ? '${d.inHours}h${m}m' : '${d.inHours}h';
-  }
 
   String _nameOf(String id) {
     for (final a in attrs) {
@@ -380,7 +553,7 @@ class _UsageBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxMs = usage.isEmpty ? 1 : usage.first.duration.inMilliseconds;
+    final maxMs = _maxMs([...screen, ...music]);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -395,11 +568,11 @@ class _UsageBlock extends StatelessWidget {
             children: [
               const Icon(Icons.phone_android, size: 14, color: kSub),
               const SizedBox(width: 6),
-              const Text('手机使用（已自动判断）',
+              const Text('刷手机（已自动判断）',
                   style: TextStyle(fontSize: 11.5, color: kSub)),
               const Spacer(),
               Text(
-                _fmt(total),
+                _m(screenTotal),
                 style: const TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w600,
@@ -408,45 +581,32 @@ class _UsageBlock extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 9),
-          ...usage.take(6).map((u) {
-            final ratio = (u.duration.inMilliseconds / maxMs).clamp(0.04, 1.0);
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 7),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 92,
-                    child: Text(u.appName,
-                        style: const TextStyle(fontSize: 12),
-                        overflow: TextOverflow.ellipsis),
-                  ),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(3),
-                      child: LinearProgressIndicator(
-                        value: ratio,
-                        minHeight: 4,
-                        backgroundColor: kBg,
-                        valueColor: const AlwaysStoppedAnimation(kAccent),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 46,
-                    child: Text(
-                      _fmt(u.duration),
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(fontSize: 11, color: kSub),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
+          if (screen.isEmpty)
+            const Text('这段没有占注意力的使用',
+                style: TextStyle(fontSize: 11.5, color: kSub))
+          else
+            ...screen.take(6).map((u) => _barRow(u, maxMs)),
+
+          if (music.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.headphones, size: 13, color: kSub),
+                const SizedBox(width: 6),
+                const Text('背景听歌（不算刷手机）',
+                    style: TextStyle(fontSize: 11, color: kSub)),
+                const Spacer(),
+                Text(_m(musicTotal),
+                    style: const TextStyle(fontSize: 11, color: kSub)),
+              ],
+            ),
+            const SizedBox(height: 7),
+            ...music.take(3).map((u) => _barRow(u, maxMs, dim: true)),
+          ],
 
           const SizedBox(height: 4),
           const Divider(color: kBg, height: 14),
+
           if (judging)
             const Row(
               children: [

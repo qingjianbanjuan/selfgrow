@@ -329,12 +329,24 @@ class AiJudgement {
   }
 }
 
+/// 手机使用的类型 —— 只有两种，够用了
+enum UsageKind {
+  /// 占注意力：刷视频、打游戏、刷帖子（真的在"用手机"）
+  immersive,
+
+  /// 背景音乐：听歌（很可能同时在做事，不算刷手机）
+  background,
+}
+
 /// 手机使用摘要（给 AI 用）
 class AppUsageBrief {
   final String packageName;
   final String appName;
   final Duration duration;
-  AppUsageBrief(this.packageName, this.appName, this.duration);
+  final UsageKind kind;
+
+  AppUsageBrief(this.packageName, this.appName, this.duration,
+      {this.kind = UsageKind.immersive});
 
   String get label {
     final m = duration.inMinutes;
@@ -342,6 +354,12 @@ class AppUsageBrief {
     if (m < 60) return '$appName $m分钟';
     return '$appName ${(m / 60).toStringAsFixed(1)}小时';
   }
+
+  /// 是否算"在刷手机"（背景播放不算）
+  bool get countsAsScreenTime => kind == UsageKind.immersive;
+
+  /// 背景播放（听歌等），不算刷手机
+  bool get isBackground => kind == UsageKind.background;
 
   @override
   String toString() => label;

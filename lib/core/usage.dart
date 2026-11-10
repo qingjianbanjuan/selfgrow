@@ -109,7 +109,8 @@ class UsageService {
             if (n != null && n.isNotEmpty) _names[pkg] = n;
           }).catchError((_) {});
         }
-        return AppUsageBrief(pkg, name, Duration(milliseconds: ms));
+        return AppUsageBrief(pkg, name, Duration(milliseconds: ms),
+            kind: classify(pkg, name));
       }).toList();
     } catch (e) {
       debugPrint('[selfgrow] usage query failed: $e');
@@ -134,6 +135,33 @@ class UsageService {
     return f;
   }
 
+  // ---------------- 应用分类 ----------------
+
+  /// 音乐类 —— 你只用网易云，但把常见的都列上，不吃亏
+  static const _musicHints = [
+    'cloudmusic', // 网易云音乐
+    'qqmusic',
+    'kugou',
+    'kuwo',
+    'spotify',
+    'ximalaya',
+    'netease.cloud',
+    '网易云',
+    '云音乐',
+    '酷狗',
+    '酷我',
+    '喜马拉雅',
+  ];
+
+  /// 判断这个 App 是不是"听歌"（听歌不算刷手机）
+  static UsageKind classify(String pkg, String name) {
+    final p = pkg.toLowerCase();
+    final n = name.toLowerCase();
+    if (_musicHints.any((h) => p.contains(h) || n.contains(h))) {
+      return UsageKind.background;
+    }
+    return UsageKind.immersive;
+  }
   /// 拿不到应用名时的兜底（从包名推）
   static String _fallbackName(String pkg) {
     final parts = pkg.split('.');

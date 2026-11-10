@@ -108,6 +108,24 @@ class AiService {
     }
   }
 
+  /// 把使用记录分成「真的在用手机」和「背景播放」两段。
+  /// 听歌/播客很可能是在边听边做事，不能算刷手机。
+  static String renderUsage(List<AppUsageBrief> usage) {
+    if (usage.isEmpty) return '（无）';
+    final screen = usage.where((u) => !u.isBackground).toList();
+    final bg = usage.where((u) => u.isBackground).toList();
+
+    final parts = <String>[];
+    if (screen.isNotEmpty) {
+      parts.add(screen.take(8).map((u) => u.label).join('、'));
+    }
+    if (bg.isNotEmpty) {
+      parts.add(
+          '（背景播放，不算刷手机：${bg.take(4).map((u) => u.label).join('、')}）');
+    }
+    return parts.isEmpty ? '（无）' : parts.join(' ');
+  }
+
   /// 宽松解析：模型偶尔会输出带尾巴/前言的非标 JSON。
   /// 先直接解，失败就截取最外层 { } 再解。
   static Map<String, dynamic>? _parseLoose(String s) {
@@ -188,9 +206,7 @@ class AiService {
   }) async {
     final table = renderAttrTable(attrs, groups);
 
-    final usageLine = usage.isEmpty
-        ? '（无）'
-        : usage.take(8).map((u) => u.label).join('、');
+    final usageLine = renderUsage(usage);
 
     String durText;
     if (duration != null && duration.inMinutes > 0) {
@@ -391,9 +407,7 @@ $table
             })
             .join('\n');
 
-    final usageLine = usage.isEmpty
-        ? '（无）'
-        : usage.take(8).map((u) => u.label).join('、');
+    final usageLine = renderUsage(usage);
 
     final system = '''
 你在给这个人写一天的「每日评语」。你了解他的全部数据，可以有自己的判断和态度。
