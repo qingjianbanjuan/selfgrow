@@ -87,7 +87,7 @@ class _DetailPageState extends State<DetailPage> {
                                     fontSize: 11, color: kSub)),
                             const Spacer(),
                             Text(
-                              widget.store.groupLevel(g.id).toStringAsFixed(1),
+                              '${(widget.store.groupProgress(g.id) * 100).round()}%',
                               style: TextStyle(
                                 fontSize: 12.5,
                                 color: g.color,
@@ -141,6 +141,7 @@ class _DetailPageState extends State<DetailPage> {
         (widget.store.sortedGroups.isEmpty
             ? null
             : widget.store.sortedGroups.first.id);
+    var kind = AttrKind.ability;
 
     await showDialog<void>(
       context: context,
@@ -148,34 +149,67 @@ class _DetailPageState extends State<DetailPage> {
         builder: (c, setD) => AlertDialog(
           backgroundColor: kSurface,
           title: const Text('新建属性', style: TextStyle(fontSize: 15)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                autofocus: true,
-                decoration: const InputDecoration(hintText: '属性名，比如「游泳」'),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: groupId,
-                decoration: const InputDecoration(hintText: '所属分组'),
-                dropdownColor: kSurface2,
-                items: widget.store.sortedGroups
-                    .map((g) => DropdownMenuItem(
-                          value: g.id,
-                          child: Text('${g.emoji} ${g.name}',
-                              style: const TextStyle(fontSize: 13)),
-                        ))
-                    .toList(),
-                onChanged: (v) => setD(() => groupId = v),
-              ),
-            ],
+          content: SizedBox(
+            width: 300,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(hintText: '属性名，比如「游泳」'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: groupId,
+                  decoration: const InputDecoration(hintText: '所属分组'),
+                  dropdownColor: kSurface2,
+                  items: widget.store.sortedGroups
+                      .map((g) => DropdownMenuItem(
+                            value: g.id,
+                            child: Text('${g.emoji} ${g.name}',
+                                style: const TextStyle(fontSize: 13)),
+                          ))
+                      .toList(),
+                  onChanged: (v) => setD(() => groupId = v),
+                ),
+                const SizedBox(height: 12),
+                // 关键选择：这个是"能力"还是"状态"
+                SegmentedButton<AttrKind>(
+                  segments: const [
+                    ButtonSegment(
+                      value: AttrKind.ability,
+                      label: Text('能力', style: TextStyle(fontSize: 12)),
+                      icon: Icon(Icons.trending_up, size: 15),
+                    ),
+                    ButtonSegment(
+                      value: AttrKind.state,
+                      label: Text('状态', style: TextStyle(fontSize: 12)),
+                      icon: Icon(Icons.water_drop_outlined, size: 15),
+                    ),
+                  ],
+                  selected: {kind},
+                  onSelectionChanged: (s) => setD(() => kind = s.first),
+                  style: ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    textStyle:
+                        WidgetStateProperty.all(const TextStyle(fontSize: 12)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  kind == AttrKind.ability
+                      ? '能力型：会累积、有等级（如英语、编程）'
+                      : '状态型：有当前值 0~100、没有等级（如卫生、心情）',
+                  style: const TextStyle(fontSize: 10.5, color: kSub),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(c),
-                child: const Text('取消')),
+                onPressed: () => Navigator.pop(c), child: const Text('取消')),
             FilledButton(
               onPressed: () async {
                 final n = nameCtrl.text.trim();
@@ -184,6 +218,8 @@ class _DetailPageState extends State<DetailPage> {
                   name: n,
                   groupId: groupId!,
                   emoji: '✨',
+                  kind: kind,
+                  decay: kind == AttrKind.state ? 3 : 0.5,
                 );
                 if (c.mounted) Navigator.pop(c);
               },
@@ -251,17 +287,25 @@ class _AttrRow extends StatelessWidget {
                 style: const TextStyle(fontSize: 12.5),
                 overflow: TextOverflow.ellipsis),
           ),
-          Text('Lv.${a.level}',
-              style: TextStyle(
-                  fontSize: 11,
-                  color: groupColor,
-                  fontWeight: FontWeight.w600)),
+          // 能力型显示 Lv.N；状态型显示当前数值 + 状态词
+          Text(
+            a.primaryText,
+            style: TextStyle(
+                fontSize: 11,
+                color: groupColor,
+                fontWeight: FontWeight.w600),
+          ),
+          if (a.isState) ...[
+            const SizedBox(width: 4),
+            Text(a.stateLabel,
+                style: const TextStyle(fontSize: 10, color: kSub)),
+          ],
           const SizedBox(width: 8),
           Expanded(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
-                value: a.progress,
+                value: a.isState ? (a.value / 100) : a.progress,
                 minHeight: 5,
                 backgroundColor: kSurface2,
                 valueColor: AlwaysStoppedAnimation(groupColor),

@@ -1,21 +1,38 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/ai.dart';
 import '../core/models.dart';
 import '../core/store.dart';
 import 'theme.dart';
 
-Future<void> showRecordSheet(BuildContext context, GameStore store) {
+Future<void> showRecordSheet(
+  BuildContext context,
+  GameStore store, {
+  String? initialText,
+  bool autoJudge = false,
+}) {
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,
-    builder: (_) => _RecordSheet(store: store),
+    builder: (_) => _RecordSheet(
+      store: store,
+      initialText: initialText,
+      autoJudge: autoJudge,
+    ),
   );
 }
 
 class _RecordSheet extends StatefulWidget {
   final GameStore store;
-  const _RecordSheet({required this.store});
+  final String? initialText;
+  final bool autoJudge;
+
+  const _RecordSheet({
+    required this.store,
+    this.initialText,
+    this.autoJudge = false,
+  });
 
   @override
   State<_RecordSheet> createState() => _RecordSheetState();
@@ -31,6 +48,19 @@ class _RecordSheetState extends State<_RecordSheet> {
   String? _previewRaw;
 
   @override
+  void initState() {
+    super.initState();
+    final txt = widget.initialText;
+    if (txt != null && txt.trim().isNotEmpty) {
+      _textCtrl.text = txt.trim();
+      _aiMode = true;
+      if (widget.autoJudge) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _judge());
+      }
+    }
+  }
+
+  @override
   void dispose() {
     _textCtrl.dispose();
     super.dispose();
@@ -39,6 +69,10 @@ class _RecordSheetState extends State<_RecordSheet> {
   // ---------------- 快捷记录 ----------------
 
   Future<void> _applyAction(ActionDef a) async {
+    // 先抓住外层的 messenger / navigator —— pop 之后 sheet 的 context 就失效了
+    final messenger = ScaffoldMessenger.of(context);
+    final nav = Navigator.of(context);
+
     final entry = await widget.store.applyEffects(
       label: a.name,
       emoji: a.emoji,
@@ -46,12 +80,40 @@ class _RecordSheetState extends State<_RecordSheet> {
       source: 'preset',
     );
     if (!mounted) return;
+
     if (entry == null) {
-      _toast('没有实际变化（属性可能已满或不存在）');
+      _toast('这件事没有产生属性变化（属性可能已满）');
       return;
     }
-    _toast('已记录：${a.name}');
-    setState(() {});
+
+    // 触感反馈：让"点上了"这件事有物理确认
+    HapticFeedback.mediumImpact();
+
+    final detail = entry.effects.map((e) {
+      final at = widget.store.attr(e.attrId);
+      final n = at?.name ?? e.attrId;
+      return '$n${e.delta >= 0 ? '+' : ''}${e.delta}';
+    }).join('  ');
+
+    // 先弹提示（挂在 app 级 ScaffoldMessenger 上，关掉面板后仍然可见）
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 3),
+      content: Row(
+        children: [
+          Text(a.emoji, style: const TextStyle(fontSize: 15)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '已记录 ${a.name}　$detail',
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    ));
+
+    // 立刻关闭面板：点一下就有效果，不让人猜
+    nav.pop();
   }
 
   // ---------------- AI 判定 ----------------

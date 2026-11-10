@@ -1,88 +1,118 @@
 import 'models.dart';
 
+/// 状态型属性的初始值（及格线）
+const int kStateInitial = 60;
+
+/// 能力型属性的初始经验
+const int kAbilityInitial = 0;
+
 /// 默认属性种子 —— 只是"初始数据"，用户可随意增删改
-///
-/// decayAlways = true  -> 状态型：每天固定衰减
-/// decayAlways = false -> 积累型：当天有正向增长就不衰减
 class AttrSeed {
   final String id;
   final String groupId;
   final String name;
   final String emoji;
+  final AttrKind kind;
+
+  /// 每日衰减（能力型=经验点，状态型=数值点）
   final double decay;
-  final bool decayAlways;
+
+  /// 初始值：状态型默认 60（及格线），能力型默认 0
   final int initExp;
 
-  const AttrSeed(this.id, this.groupId, this.name, this.emoji, this.decay,
-      {this.decayAlways = false, this.initExp = 0});
+  const AttrSeed(
+    this.id,
+    this.groupId,
+    this.name,
+    this.emoji,
+    this.kind, {
+    this.decay = 0,
+    int? initExp,
+  }) : initExp = initExp ??
+            (kind == AttrKind.state ? kStateInitial : kAbilityInitial);
 }
 
 /// 8 个默认分组
 List<AttrGroup> defaultGroups() => [
-      AttrGroup(id: 'body', name: '身体', emoji: '💪', colorValue: 0xFFEF5350, order: 0),
-      AttrGroup(id: 'mind', name: '头脑', emoji: '🧠', colorValue: 0xFF42A5F5, order: 1),
-      AttrGroup(id: 'lang', name: '语言', emoji: '🗣️', colorValue: 0xFFAB47BC, order: 2),
-      AttrGroup(id: 'skill', name: '技能', emoji: '🛠️', colorValue: 0xFF26C6DA, order: 3),
-      AttrGroup(id: 'social', name: '社交', emoji: '🤝', colorValue: 0xFFFFA726, order: 4),
-      AttrGroup(id: 'emotion', name: '情绪', emoji: '💗', colorValue: 0xFFEC407A, order: 5),
-      AttrGroup(id: 'life', name: '生活', emoji: '🏠', colorValue: 0xFF66BB6A, order: 6),
-      AttrGroup(id: 'aesthetic', name: '审美', emoji: '🎨', colorValue: 0xFF8D6E63, order: 7),
+      AttrGroup(
+          id: 'body', name: '身体', emoji: '💪', colorValue: 0xFFEF5350, order: 0),
+      AttrGroup(
+          id: 'mind', name: '头脑', emoji: '🧠', colorValue: 0xFF42A5F5, order: 1),
+      AttrGroup(
+          id: 'lang', name: '语言', emoji: '🗣️', colorValue: 0xFFAB47BC, order: 2),
+      AttrGroup(
+          id: 'skill', name: '技能', emoji: '🛠️', colorValue: 0xFF26C6DA, order: 3),
+      AttrGroup(
+          id: 'social', name: '社交', emoji: '🤝', colorValue: 0xFFFFA726, order: 4),
+      AttrGroup(
+          id: 'emotion', name: '情绪', emoji: '💗', colorValue: 0xFFEC407A, order: 5),
+      AttrGroup(
+          id: 'life', name: '生活', emoji: '🏠', colorValue: 0xFF66BB6A, order: 6),
+      AttrGroup(
+          id: 'aesthetic', name: '审美', emoji: '🎨', colorValue: 0xFF8D6E63, order: 7),
     ];
 
 /// 37 个默认属性
+///
+/// 状态型（state，10 个）：体力 / 卫生 / 专注 / 心情 / 稳定 / 抗压 / 意志 / 睡眠 / 饮食 / 健康
+/// 能力型（ability，27 个）：其余
 List<AttrSeed> defaultAttrSeeds() => const [
       // ===== 身体 =====
-      AttrSeed('stamina', 'body', '体力', '💪', 8, decayAlways: true),
-      AttrSeed('strength', 'body', '力量', '🏋️', 2.0),
-      AttrSeed('endurance', 'body', '耐力', '🏃', 2.0),
-      AttrSeed('agility', 'body', '灵敏', '🤸', 1.5),
-      AttrSeed('health', 'body', '健康', '❤️', 1.5),
-      AttrSeed('hygiene', 'body', '卫生', '🧼', 12, decayAlways: true),
+      // 体力、卫生、健康是"当前状态"，会掉，没有等级
+      AttrSeed('stamina', 'body', '体力', '💪', AttrKind.state, decay: 8),
+      AttrSeed('strength', 'body', '力量', '🏋️', AttrKind.ability, decay: 2.0),
+      AttrSeed('endurance', 'body', '耐力', '🏃', AttrKind.ability, decay: 2.0),
+      AttrSeed('agility', 'body', '灵敏', '🤸', AttrKind.ability, decay: 1.5),
+      AttrSeed('health', 'body', '健康', '❤️', AttrKind.state, decay: 1.5),
+      AttrSeed('hygiene', 'body', '卫生', '🧼', AttrKind.state, decay: 12),
 
       // ===== 头脑 =====
-      AttrSeed('intellect', 'mind', '智力', '🧠', 0.4),
-      AttrSeed('focus', 'mind', '专注', '🎯', 6, decayAlways: true),
-      AttrSeed('memory', 'mind', '记忆', '🧩', 0.4),
-      AttrSeed('logic', 'mind', '逻辑', '🔗', 0.4),
-      AttrSeed('learning', 'mind', '学习', '📚', 0.8),
+      AttrSeed('intellect', 'mind', '智力', '🧠', AttrKind.ability, decay: 0.4),
+      AttrSeed('focus', 'mind', '专注', '🎯', AttrKind.state, decay: 6),
+      AttrSeed('memory', 'mind', '记忆', '🧩', AttrKind.ability, decay: 0.4),
+      AttrSeed('logic', 'mind', '逻辑', '🔗', AttrKind.ability, decay: 0.4),
+      AttrSeed('learning', 'mind', '学习', '📚', AttrKind.ability, decay: 0.8),
 
       // ===== 语言 =====
-      AttrSeed('english', 'lang', '英语', '🇬🇧', 0.3),
-      AttrSeed('expression', 'lang', '表达', '🗣️', 0.4),
-      AttrSeed('writing', 'lang', '写作', '✍️', 0.8),
-      AttrSeed('reading', 'lang', '阅读', '📖', 0.8),
-      AttrSeed('speaking', 'lang', '演讲', '🎤', 1.0),
+      AttrSeed('english', 'lang', '英语', '🇬🇧', AttrKind.ability, decay: 0.3),
+      AttrSeed('expression', 'lang', '表达', '🗣️', AttrKind.ability, decay: 0.4),
+      AttrSeed('writing', 'lang', '写作', '✍️', AttrKind.ability, decay: 0.8),
+      AttrSeed('reading', 'lang', '阅读', '📖', AttrKind.ability, decay: 0.8),
+      AttrSeed('speaking', 'lang', '演讲', '🎤', AttrKind.ability, decay: 1.0),
 
       // ===== 技能 =====
-      AttrSeed('programming', 'skill', '编程', '💻', 0.4),
-      AttrSeed('professional', 'skill', '专业', '🎓', 0.4),
-      AttrSeed('efficiency', 'skill', '效率', '⚡', 1.0),
-      AttrSeed('handson', 'skill', '动手', '🔧', 0.8),
+      AttrSeed('programming', 'skill', '编程', '💻', AttrKind.ability, decay: 0.4),
+      AttrSeed('professional', 'skill', '专业', '🎓', AttrKind.ability, decay: 0.4),
+      AttrSeed('efficiency', 'skill', '效率', '⚡', AttrKind.ability, decay: 1.0),
+      AttrSeed('handson', 'skill', '动手', '🔧', AttrKind.ability, decay: 0.8),
 
       // ===== 社交 =====
-      AttrSeed('affinity', 'social', '亲和', '🤝', 1.0),
-      AttrSeed('empathy', 'social', '共情', '💞', 1.0),
-      AttrSeed('communication', 'social', '沟通', '💬', 1.0),
-      AttrSeed('influence', 'social', '影响', '📣', 0.8),
-      AttrSeed('network', 'social', '人脉', '🕸️', 0.8),
+      AttrSeed('affinity', 'social', '亲和', '🤝', AttrKind.ability, decay: 1.0),
+      AttrSeed('empathy', 'social', '共情', '💞', AttrKind.ability, decay: 1.0),
+      AttrSeed('communication', 'social', '沟通', '💬', AttrKind.ability,
+          decay: 1.0),
+      AttrSeed('influence', 'social', '影响', '📣', AttrKind.ability, decay: 0.8),
+      AttrSeed('network', 'social', '人脉', '🕸️', AttrKind.ability, decay: 0.8),
 
-      // ===== 情绪 =====
-      AttrSeed('mood', 'emotion', '心情', '😊', 6, decayAlways: true),
-      AttrSeed('stability', 'emotion', '稳定', '⚖️', 2, decayAlways: true),
-      AttrSeed('resilience', 'emotion', '抗压', '🛡️', 3, decayAlways: true),
-      AttrSeed('willpower', 'emotion', '意志', '🔥', 3, decayAlways: true),
+      // ===== 情绪（全部是状态）=====
+      AttrSeed('mood', 'emotion', '心情', '😊', AttrKind.state, decay: 6),
+      AttrSeed('stability', 'emotion', '稳定', '⚖️', AttrKind.state, decay: 2),
+      AttrSeed('resilience', 'emotion', '抗压', '🛡️', AttrKind.state, decay: 3),
+      AttrSeed('willpower', 'emotion', '意志', '🔥', AttrKind.state, decay: 3),
 
       // ===== 生活 =====
-      AttrSeed('sleep', 'life', '睡眠', '😴', 10, decayAlways: true),
-      AttrSeed('diet', 'life', '饮食', '🍚', 5, decayAlways: true),
-      AttrSeed('finance', 'life', '财务', '💰', 0.5),
-      AttrSeed('order', 'life', '秩序', '🧹', 1.5),
-      AttrSeed('discipline', 'life', '自律', '⏰', 1.2),
+      AttrSeed('sleep', 'life', '睡眠', '😴', AttrKind.state, decay: 10),
+      AttrSeed('diet', 'life', '饮食', '🍚', AttrKind.state, decay: 5),
+      AttrSeed('finance', 'life', '财务', '💰', AttrKind.ability, decay: 0.5),
+      AttrSeed('order', 'life', '秩序', '🧹', AttrKind.ability, decay: 1.5),
+      AttrSeed('discipline', 'life', '自律', '⏰', AttrKind.ability, decay: 1.2),
 
       // ===== 审美 =====
-      AttrSeed('aesthetic', 'aesthetic', '审美', '🎨', 0.4),
-      AttrSeed('creativity', 'aesthetic', '创造', '💡', 0.5),
-      AttrSeed('design', 'aesthetic', '设计', '🖌️', 0.5),
+      AttrSeed('aesthetic', 'aesthetic', '审美', '🎨', AttrKind.ability,
+          decay: 0.4),
+      AttrSeed('creativity', 'aesthetic', '创造', '💡', AttrKind.ability,
+          decay: 0.5),
+      AttrSeed('design', 'aesthetic', '设计', '🖌️', AttrKind.ability, decay: 0.5),
     ];
 
 /// 把种子转成可变属性对象
@@ -96,9 +126,9 @@ List<Attribute> attributesFromSeeds() {
       groupId: s.groupId,
       name: s.name,
       emoji: s.emoji,
+      kind: s.kind,
       exp: s.initExp,
       decayPerDay: s.decay,
-      decayAlways: s.decayAlways,
       order: i,
     ));
   }
@@ -118,7 +148,7 @@ List<ActionDef> defaultActions() => [
           Effect('strength', 2),
           Effect('endurance', 6),
           Effect('mood', 3),
-          Effect('hygiene', -8), // 出汗
+          Effect('hygiene', -8),
         ],
       ),
       ActionDef(

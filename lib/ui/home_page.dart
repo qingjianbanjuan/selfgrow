@@ -3,63 +3,138 @@ import 'package:flutter/material.dart';
 import '../core/ai.dart';
 import '../core/models.dart';
 import '../core/store.dart';
+import '../core/usage.dart';
+import '../core/weather.dart';
+import 'ask_sheet.dart';
 import 'avatar.dart';
 import 'detail_page.dart';
 import 'record_sheet.dart';
 import 'settings_sheet.dart';
 import 'theme.dart';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   final GameStore store;
   const HomePage({super.key, required this.store});
 
   @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  bool _askedThisLaunch = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadWeather();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAsk());
+  }
+
+  /// 天气是异步的，加载完必须 setState 才会显示
+  Future<void> _loadWeather() async {
+    await WeatherService.load();
+    if (mounted) setState(() {});
+  }
+
+  /// 打开 App 时：距上一条记录 >= 30 分钟才问
+  Future<void> _maybeAsk() async {
+    if (_askedThisLaunch) return;
+    _askedThisLaunch = true;
+    final store = widget.store;
+    if (!store.loaded) return;
+    // 从来没记录过，就不打扰
+    if (store.lastLoggedAt == null) return;
+    if (!store.shouldAsk) return;
+
+    // 距上一条记录超过 12 小时，就按 12 小时算（避免"3 天前"这种怪话）
+    var since = store.lastLoggedAt!;
+    final maxGap = DateTime.now().subtract(const Duration(hours: 12));
+    if (since.isBefore(maxGap)) since = maxGap;
+
+    final hasPerm = await UsageService.hasPermission();
+    final usage =
+        hasPerm ? await UsageService.recent(since: since) : <AppUsageBrief>[];
+    if (!mounted) return;
+
+    final text = await showAskSheet(
+      context,
+      store,
+      since: since,
+      usage: usage,
+      hasUsagePermission: hasPerm,
+    );
+    if (!mounted || text == null || text.trim().isEmpty) return;
+
+    await store.markAsked();
+    if (!mounted) return;
+    // 直接走 AI 判定 + 预览确认
+    showRecordSheet(context, store, initialText: text, autoJudge: true);
+  }
+
+  /// 状态：心情 / 睡眠 / 体力 的平均
+  static double _vitality(GameStore s) {
+    double v(String id) {
+      final a = s.attr(id);
+      if (a == null) return 0.6;
+      return a.isState ? a.value / 100 : a.normalized;
+    }
+
+    return (v('mood') + v('sleep') + v('stamina')) / 3;
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: store,
+      animation: widget.store,
       builder: (context, _) {
+        final store = widget.store;
         if (!store.loaded) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        final enabled = store.attrs.where((a) => a.enabled).toList();
-        final avg = enabled.isEmpty
-            ? 1.0
-            : enabled.fold<int>(0, (p, a) => p + a.level) / enabled.length;
+        final avg = store.overallAvgLevel;
+        final w = WeatherService.cached;
 
         return Scaffold(
-          body: SafeArea(
-            child: Column(
-              children: [
-                _Header(store: store, avg: avg),
-                _GroupGrid(store: store),
-                Expanded(
-                  child: Center(
-                    child: AvatarFigure(
-                      level: avg,
-                      vitality: _vitality(store),
+          body: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: w != null ? [w.tint, kBg] : [kSurface, kBg],
+              ),
+            ),
+            child: SafeArea(
+              child: Column(
+                children: [
+                  _Header(store: store, avg: avg, weather: w),
+                  _GroupGrid(store: store),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, cons) {
+                        final s = (cons.maxWidth * 0.82)
+                            .clamp(160.0, cons.maxHeight * 0.95)
+                            .toDouble();
+                        return Center(
+                          child: AvatarFigure(
+                            level: avg,
+                            vitality: _vitality(store),
+                            width: s,
+                            height: s * 1.2,
+                          ),
+                        );
+                      },
                     ),
                   ),
-                ),
-                _Footer(store: store),
-              ],
+                  _Footer(store: store),
+                ],
+              ),
             ),
           ),
         );
       },
     );
-  }
-
-  /// 状态：心情 / 睡眠 / 体力 的平均（按等级归一到 0..1）
-  static double _vitality(GameStore s) {
-    double norm(String id) {
-      final a = s.attr(id);
-      if (a == null) return 0.7;
-      return ((a.level - 1) / 8).clamp(0.0, 1.0);
-    }
-
-    return (norm('mood') + norm('sleep') + norm('stamina')) / 3;
   }
 }
 
@@ -68,49 +143,69 @@ class HomePage extends StatelessWidget {
 class _Header extends StatelessWidget {
   final GameStore store;
   final double avg;
-  const _Header({required this.store, required this.avg});
+  final WeatherInfo? weather;
+
+  const _Header({required this.store, required this.avg, this.weather});
 
   @override
   Widget build(BuildContext context) {
-    final frac = avg - avg.floorToDouble();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 8, 6),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Row(
             children: [
               Text(
                 '综合 Lv.${avg.floor()}',
                 style: const TextStyle(
                   fontSize: 19,
                   fontWeight: FontWeight.w700,
-                  letterSpacing: 0.2,
                 ),
               ),
-              const SizedBox(height: 2),
-              Text(
-                '${store.totalExp} 经验 · ${store.todayCount} 件事',
-                style: const TextStyle(fontSize: 11, color: kSub),
+              const Spacer(),
+              if (weather != null)
+                GestureDetector(
+                  onTap: () async {
+                    await WeatherService.load(force: true);
+                  },
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: kSurface2.withAlpha(160),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      weather!.short,
+                      style: const TextStyle(fontSize: 11, color: kText),
+                    ),
+                  ),
+                ),
+              IconButton(
+                icon:
+                    const Icon(Icons.settings_outlined, size: 20, color: kSub),
+                onPressed: () => showSettingsSheet(context, store),
+                tooltip: '设置',
+                visualDensity: VisualDensity.compact,
               ),
             ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: LinearProgressIndicator(
-                value: frac.clamp(0.0, 1.0),
-                minHeight: 6,
-                backgroundColor: kSurface2,
-                valueColor: AlwaysStoppedAnimation(levelColor(avg)),
-              ),
-            ),
+          Text(
+            store.hasState
+                ? '状态 ${store.stateAverage.round()}% · ${store.todayCount} 件事'
+                : '${store.todayCount} 件事',
+            style: const TextStyle(fontSize: 11, color: kSub),
           ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, size: 20, color: kSub),
-            onPressed: () => showSettingsSheet(context, store),
-            tooltip: '设置',
+          const SizedBox(height: 7),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: store.abilityProgress.clamp(0.0, 1.0),
+              minHeight: 6,
+              backgroundColor: kSurface2,
+              valueColor: const AlwaysStoppedAnimation(kAccent),
+            ),
           ),
         ],
       ),
@@ -155,8 +250,7 @@ class _GroupTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final lv = store.groupLevel(g.id);
-    final count = store.attrsOf(g.id).length;
+    final p = store.groupProgress(g.id);
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -165,23 +259,20 @@ class _GroupTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
-          color: kSurface,
+          color: kSurface.withAlpha(200),
           borderRadius: BorderRadius.circular(10),
         ),
         child: Row(
           children: [
             Text(g.emoji, style: const TextStyle(fontSize: 13)),
             const SizedBox(width: 5),
-            Text(
-              g.name,
-              style: const TextStyle(fontSize: 11.5, color: kText),
-            ),
+            Text(g.name, style: const TextStyle(fontSize: 11.5, color: kText)),
             const SizedBox(width: 6),
             Expanded(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(4),
                 child: LinearProgressIndicator(
-                  value: ((lv - 1) / 12).clamp(0.02, 1.0),
+                  value: p.clamp(0.0, 1.0),
                   minHeight: 4,
                   backgroundColor: kSurface2,
                   valueColor: AlwaysStoppedAnimation(g.color),
@@ -190,14 +281,9 @@ class _GroupTile extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             Text(
-              lv.toStringAsFixed(1),
+              '${(p * 100).round()}%',
               style: const TextStyle(fontSize: 10.5, color: kSub),
             ),
-            if (count == 0)
-              const Padding(
-                padding: EdgeInsets.only(left: 3),
-                child: Icon(Icons.add, size: 11, color: kSub),
-              ),
           ],
         ),
       ),
@@ -214,20 +300,15 @@ class _Footer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final today = store.todayCount;
-    final span = store.todayActiveSpan;
-    final spanText = span.inMinutes < 1
-        ? ''
-        : ' · 跨度 ${span.inHours > 0 ? '${span.inHours}h' : '${span.inMinutes}m'}';
-
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: Column(
         children: [
           Text(
-            today == 0 ? '今天还没有记录' : '今天 $today 件事$spanText',
-            style: const TextStyle(fontSize: 11.5, color: kSub),
+            today == 0 ? '今天还没有记录' : '今天 $today 件事',
+            style: const TextStyle(fontSize: 12, color: kSub),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 9),
           Row(
             children: [
               Expanded(
@@ -244,13 +325,13 @@ class _Footer extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: OutlinedButton.icon(
+                child: FilledButton.icon(
                   onPressed: () => showDailyComment(context, store),
                   icon: const Icon(Icons.insights_outlined, size: 18),
                   label: const Text('今天怎么样'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: kText,
-                    side: const BorderSide(color: kSurface2),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1F2A3A),
+                    foregroundColor: kAccent,
                     padding: const EdgeInsets.symmetric(vertical: 13),
                   ),
                 ),
@@ -300,10 +381,19 @@ class _CommentSheetState extends State<_CommentSheet> {
       loading = true;
       error = null;
     });
+
+    final since = GameStore.dayStart();
+    final hasPerm = await UsageService.hasPermission();
+    final usage = hasPerm
+        ? await UsageService.recent(since: since, limit: 8)
+        : <AppUsageBrief>[];
+
     final c = await AiService.dailyComment(
       todayLogs: widget.store.logsToday,
       attrs: widget.store.attrs,
       groups: widget.store.groups,
+      weather: WeatherService.cached?.forAi,
+      usage: usage,
     );
     if (!mounted) return;
     if (c == null) {
@@ -318,12 +408,13 @@ class _CommentSheetState extends State<_CommentSheet> {
       body: c.body,
       highlights: c.highlights,
     );
-    setState(() => loading = false);
+    if (mounted) setState(() => loading = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final s = widget.store;
+    final w = WeatherService.cached;
     return Padding(
       padding: EdgeInsets.only(
         left: 20,
@@ -339,6 +430,12 @@ class _CommentSheetState extends State<_CommentSheet> {
             children: [
               const Text('今天怎么样',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              if (w != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Text(w.short,
+                      style: const TextStyle(fontSize: 11, color: kSub)),
+                ),
               const Spacer(),
               if (!s.commentStale)
                 IconButton(
@@ -403,8 +500,8 @@ class _CommentSheetState extends State<_CommentSheet> {
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Text(h,
-                              style: const TextStyle(
-                                  fontSize: 11.5, color: kSub)),
+                              style:
+                                  const TextStyle(fontSize: 11.5, color: kSub)),
                         ))
                     .toList(),
               ),

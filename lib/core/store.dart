@@ -69,21 +69,55 @@ class GameStore extends ChangeNotifier {
     return list;
   }
 
-  /// 某组平均等级（1..）
-  double groupLevel(String groupId) {
+  /// 某组平均进度 0..1（能力型看等级，状态型看数值）
+  double groupProgress(String groupId) {
     final list = attrsOf(groupId);
+    if (list.isEmpty) return 0;
+    return list.fold<double>(0, (p, a) => p + a.normalized) / list.length;
+  }
+
+  /// 某组的能力型平均等级（状态型不参与）
+  double groupLevel(String groupId) {
+    final list = attrsOf(groupId).where((a) => !a.isState).toList();
+    if (list.isEmpty) return 0;
+    final sum = list.fold<int>(0, (p, a) => p + a.level);
+    return sum / list.length;
+  }
+
+  /// 综合等级：只由「能力型」属性决定
+  int get overallLevel {
+    final list = attrs.where((a) => a.enabled && !a.isState).toList();
+    if (list.isEmpty) return 1;
+    final sum = list.fold<int>(0, (p, a) => p + a.level);
+    return (sum / list.length).floor().clamp(1, 999);
+  }
+
+  /// 综合等级的小数部分，用于进度条
+  double get overallAvgLevel {
+    final list = attrs.where((a) => a.enabled && !a.isState).toList();
     if (list.isEmpty) return 1;
     final sum = list.fold<int>(0, (p, a) => p + a.level);
     return sum / list.length;
   }
 
-  /// 综合等级：所有启用属性的平均等级
-  int get overallLevel {
-    final list = attrs.where((a) => a.enabled).toList();
-    if (list.isEmpty) return 1;
-    final sum = list.fold<int>(0, (p, a) => p + a.level);
-    return (sum / list.length).floor().clamp(1, 999);
+  /// 状态型属性的平均数值 0..100
+  double get stateAverage {
+    final list = attrs.where((a) => a.enabled && a.isState).toList();
+    if (list.isEmpty) return 0;
+    return list.fold<double>(0, (p, a) => p + a.value) / list.length;
   }
+
+  /// 状态型属性的平均归一值 0..1
+  double get stateNormalized => (stateAverage / 100).clamp(0.0, 1.0);
+
+  /// 能力型属性的平均归一值 0..1（用于顶部总进度条）
+  double get abilityProgress {
+    final list = attrs.where((a) => a.enabled && !a.isState).toList();
+    if (list.isEmpty) return 0;
+    return list.fold<double>(0, (p, a) => p + a.normalized) / list.length;
+  }
+
+  bool get hasState => attrs.any((a) => a.enabled && a.isState);
 
   int get totalExp => attrs.fold<int>(0, (p, a) => p + a.exp);
 
@@ -224,7 +258,7 @@ class GameStore extends ChangeNotifier {
         if (hasPositive) continue;
       }
       final loss = (a.decayPerDay * days).round();
-      a.exp = (a.exp - loss).clamp(0, 1 << 20);
+      a.exp = a.clampExp(a.exp - loss);
     }
     lastDecayAt = now;
     await save();
@@ -246,7 +280,7 @@ class GameStore extends ChangeNotifier {
     for (final e in effects) {
       final a = attr(e.attrId);
       if (a == null) continue;
-      final next = (a.exp + e.delta).clamp(0, 1 << 20);
+      final next = a.clampExp(a.exp + e.delta);
       final real = next - a.exp;
       if (real == 0) continue;
       a.exp = next;
@@ -275,7 +309,7 @@ class GameStore extends ChangeNotifier {
     for (final e in entry.effects) {
       final a = attr(e.attrId);
       if (a == null) continue;
-      a.exp = (a.exp - e.delta).clamp(0, 1 << 20);
+      a.exp = a.clampExp(a.exp - e.delta);
     }
     logs.removeWhere((l) => l.id == entry.id);
     await save();
@@ -288,9 +322,9 @@ class GameStore extends ChangeNotifier {
     required String name,
     required String groupId,
     String emoji = '✨',
-    int exp = 0,
+    AttrKind kind = AttrKind.ability,
+    int? exp,
     double decay = 0,
-    bool decayAlways = false,
   }) async {
     final id = 'u_${DateTime.now().microsecondsSinceEpoch}';
     attrs.add(Attribute(
@@ -298,9 +332,10 @@ class GameStore extends ChangeNotifier {
       groupId: groupId,
       name: name,
       emoji: emoji,
-      exp: exp,
+      kind: kind,
+      exp: exp ??
+          (kind == AttrKind.state ? kStateInitial : kAbilityInitial),
       decayPerDay: decay,
-      decayAlways: decayAlways,
       order: attrs.length,
     ));
     await save();

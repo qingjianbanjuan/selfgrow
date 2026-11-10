@@ -1,20 +1,26 @@
 import 'package:flutter/material.dart';
 
 import '../core/ai.dart';
+import '../core/models.dart';
 import '../core/store.dart';
+import '../core/usage.dart';
+import 'ask_sheet.dart';
+import 'record_sheet.dart';
 import 'theme.dart';
 
 Future<void> showSettingsSheet(BuildContext context, GameStore store) {
   return showModalBottomSheet(
     context: context,
     isScrollControlled: true,
-    builder: (_) => _SettingsSheet(store: store),
+    builder: (_) => _SettingsSheet(store: store, hostContext: context),
   );
 }
 
 class _SettingsSheet extends StatefulWidget {
   final GameStore store;
-  const _SettingsSheet({required this.store});
+  final BuildContext hostContext;
+
+  const _SettingsSheet({required this.store, required this.hostContext});
 
   @override
   State<_SettingsSheet> createState() => _SettingsSheetState();
@@ -45,12 +51,36 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     );
   }
 
+  /// 手动触发一次追问（测试用，也方便补记以前的事）
+  Future<void> _testAsk() async {
+    final host = widget.hostContext;
+    Navigator.of(context).pop();
+
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    if (!host.mounted) return;
+
+    final since = DateTime.now().subtract(const Duration(hours: 6));
+    final hasPerm = await UsageService.hasPermission();
+    final usage =
+        hasPerm ? await UsageService.recent(since: since) : <AppUsageBrief>[];
+    if (!host.mounted) return;
+
+    final text = await showAskSheet(
+      host,
+      widget.store,
+      since: since,
+      usage: usage,
+      hasUsagePermission: hasPerm,
+    );
+    if (text == null || text.trim().isEmpty) return;
+    if (!host.mounted) return;
+    showRecordSheet(host, widget.store, initialText: text, autoJudge: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(context).bottom,
-      ),
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
@@ -72,6 +102,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
               const SizedBox(height: 8),
 
+              // ---------- AI ----------
               const Text('DeepSeek API Key',
                   style: TextStyle(fontSize: 12.5, color: kSub)),
               const SizedBox(height: 6),
@@ -96,17 +127,16 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 style: TextStyle(
                     fontSize: 10.5, height: 1.5, color: kSub.withAlpha(180)),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
 
-              const Text('模型',
-                  style: TextStyle(fontSize: 12.5, color: kSub)),
+              const Text('模型', style: TextStyle(fontSize: 12.5, color: kSub)),
               const SizedBox(height: 6),
               TextField(
                 controller: _modelCtrl,
                 style: const TextStyle(fontSize: 13),
                 decoration: const InputDecoration(hintText: 'deepseek-chat'),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 16),
 
               SizedBox(
                 width: double.infinity,
@@ -120,13 +150,39 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 ),
               ),
 
+              // ---------- 权限 ----------
               const SizedBox(height: 22),
               const Divider(color: kSurface2),
               const SizedBox(height: 12),
+              const Text('权限',
+                  style:
+                      TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              const _UsagePermissionRow(),
 
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _testAsk,
+                  icon: const Icon(Icons.help_outline, size: 16),
+                  label:
+                      const Text('试一次追问', style: TextStyle(fontSize: 12.5)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: kAccent,
+                    side: BorderSide(color: kAccent.withAlpha(80)),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                  ),
+                ),
+              ),
+
+              // ---------- 数据 ----------
+              const SizedBox(height: 20),
+              const Divider(color: kSurface2),
+              const SizedBox(height: 12),
               const Text('数据',
-                  style: TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600)),
+                  style:
+                      TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               _InfoRow(
                 icon: Icons.storage_outlined,
@@ -143,6 +199,85 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 「使用情况访问权限」状态行
+class _UsagePermissionRow extends StatefulWidget {
+  const _UsagePermissionRow();
+
+  @override
+  State<_UsagePermissionRow> createState() => _UsagePermissionRowState();
+}
+
+class _UsagePermissionRowState extends State<_UsagePermissionRow> {
+  bool? granted;
+  bool checking = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final r = await UsageService.hasPermission(force: true);
+    if (!mounted) return;
+    setState(() {
+      granted = r;
+      checking = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: () async {
+        await UsageService.openPermissionSettings();
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await _check();
+      },
+      child: Container(
+        padding: const EdgeInsets.all(11),
+        decoration: BoxDecoration(
+          color: kSurface2,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              granted == true ? Icons.check_circle : Icons.error_outline,
+              size: 16,
+              color: granted == true ? kUp : kDown,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    checking
+                        ? '检查中…'
+                        : (granted == true ? '已允许读取使用情况' : '未允许读取使用情况'),
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '允许后能知道你用了哪些 App、分别多久，判断更准。数据只在本机处理。',
+                    style: TextStyle(
+                        fontSize: 10.5,
+                        height: 1.4,
+                        color: kSub.withAlpha(180)),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, size: 16, color: kSub),
+          ],
         ),
       ),
     );
