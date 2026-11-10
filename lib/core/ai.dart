@@ -7,12 +7,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
 
-/// 每日评价结果
+/// 每日评语
 class DailyComment {
   final String headline;
   final String body;
   final List<String> highlights;
-  DailyComment(this.headline, this.body, this.highlights);
+
+  /// 今天值得肯定的
+  final String? praise;
+
+  /// 今天值得反省的
+  final String? reflect;
+
+  DailyComment(
+    this.headline,
+    this.body,
+    this.highlights, {
+    this.praise,
+    this.reflect,
+  });
 }
 
 /// AI 配置（Key 存在本地，不进代码库）
@@ -68,7 +81,7 @@ class AiService {
                 {'role': 'user', 'content': user},
               ],
               'temperature': 0.3,
-              'max_tokens': 1200,
+              'max_tokens': 1600,
               'response_format': {'type': 'json_object'},
             }),
           )
@@ -93,6 +106,24 @@ class AiService {
       debugPrint('[selfgrow] ai exception: $e');
       return null;
     }
+  }
+
+  /// 宽松解析：模型偶尔会输出带尾巴/前言的非标 JSON。
+  /// 先直接解，失败就截取最外层 { } 再解。
+  static Map<String, dynamic>? _parseLoose(String s) {
+    try {
+      final v = jsonDecode(s);
+      if (v is Map<String, dynamic>) return v;
+    } catch (_) {}
+    final i = s.indexOf('{');
+    final j = s.lastIndexOf('}');
+    if (i >= 0 && j > i) {
+      try {
+        final v = jsonDecode(s.substring(i, j + 1));
+        if (v is Map<String, dynamic>) return v;
+      } catch (_) {}
+    }
+    return null;
   }
 
   static String _stripFence(String s) {
@@ -209,7 +240,11 @@ $table
     if (content == null) return offlineJudge(text, attrs);
 
     try {
-      final j = jsonDecode(content) as Map<String, dynamic>;
+      final j = _parseLoose(content);
+      if (j == null) {
+        debugPrint('[selfgrow] judge: JSON 非法，走离线规则');
+        return offlineJudge(text, attrs);
+      }
       // 注意：AI 判断"不值得记"(worth_recording=false) 时**仍然保留 effects**。
       // 用户已经明确要记录，不该替他丢掉 —— 否则会以为记上了、其实没记。
       final worth = j['worth_recording'];
@@ -361,7 +396,8 @@ $table
         : usage.take(8).map((u) => u.label).join('、');
 
     final system = '''
-你在写一份「今日状态陈述」。你是一面镜子，不是教练。
+你在给这个人写一天的「每日评语」。你了解他的全部数据，可以有自己的判断和态度。
+写给深夜的他看，要**像朋友说实话**，不像客服发通知。
 
 【今天的时间线与属性变化】
 $logsText
@@ -372,29 +408,53 @@ $table
 【今天天气】${weather ?? '（未知）'}
 【手机使用】$usageLine
 
-规则：
-1. headline ≤ 12 字，概括今天的重心
-2. body ≤ 120 字，陈述今天发生了什么、属性怎么变，可以提到具体数字
-3. highlights 3-5 条，每条是「事实 + 数字」
-4. 严禁：祈使句、建议、鼓励口号、好坏评价、因果推断（如"因为懒所以没运动"）
-5. 允许：具体数字、时间线、平淡的观察、一点点温度
-6. 只输出 JSON
+怎么写：
+1. headline：≤ 14 字，一句话定性，要有观点（可以犀利、可以惋惜、可以替他高兴）
+2. body：**180 ~ 320 字**，这是主体。要写清：
+   - 今天实际发生了什么（挑最有代表性的两三件，用具体数字和时间）
+   - 这些事让他哪些属性涨了、哪些掉了，掉了多少
+   - 你对他这一天的真实看法 —— 好在哪、差在哪
+   **宁可具体到有点扎心，也不要空洞的漂亮话**
+3. praise：1~2 句，今天真正值得肯定的地方。必须对应到具体事实，没有就留空字符串
+4. reflect：1~2 句，今天值得反省的地方。可以说得直白、可以点破他自己在回避的事，
+   但**不要说教**（不许出现"你应该""建议你""要加油"）
+5. highlights：3~5 条，纯事实 + 数字，给别人一眼看懂今天什么样
+6. 激励不靠口号。让"具体的事实 + 你的态度"本身起作用
+   —— 比如"这周你第一次连续三天碰书"，比"继续努力"有力一百倍
+7. **不许编造**：所有判断都必须能对应到上面的数据，没记录的事不许猜
+8. 可以主观，可以有情绪，可以调侃，但**不能伤人**
+9. 只输出 JSON
 
 输出格式：
-{"headline":"身体动了，脑子没动","body":"今天跑步 30 分钟，体力涨了一级多。一整天没有阅读记录。","highlights":["运动 32 分钟","阅读 0 分钟","屏幕 4.2 小时"]}
+{"headline":"身体动了，脑子没动",
+ "body":"今天你跑了 30 分钟，体力从 62 拉到 71，这是这两天最有价值的一段时间。但一整天没翻开过书，阅读停在 Lv1 已经第 9 天了。晚上 11 点后还在刷视频，专注又掉了 4 点。你不是没时间，是把时间都给了屏幕。",
+ "praise":"跑步那一趟是真的，热天能出门不容易。",
+ "reflect":"连续 9 天没读书了。你自己也知道这不对劲。",
+ "highlights":["运动 32 分钟","阅读 0 分钟","屏幕 7.0 小时","专注 -8"]}
 ''';
 
-    final content = await _chat(system, '请生成今天的陈述。');
+    final content = await _chat(system, '请写今天的评语。');
     if (content == null) return null;
     try {
-      final j = jsonDecode(content) as Map<String, dynamic>;
+      final j = _parseLoose(content);
+      if (j == null) {
+        debugPrint('[selfgrow] dailyComment: JSON 非法');
+        return null;
+      }
       final h = (j['highlights'] as List? ?? [])
           .map((e) => e.toString())
           .toList();
+      String? opt(String k) {
+        final v = (j[k] ?? '').toString().trim();
+        return v.isEmpty ? null : v;
+      }
+
       return DailyComment(
         (j['headline'] ?? '').toString(),
         (j['body'] ?? '').toString(),
         h,
+        praise: opt('praise'),
+        reflect: opt('reflect'),
       );
     } catch (e) {
       debugPrint('[selfgrow] dailyComment JSON parse failed: $e');

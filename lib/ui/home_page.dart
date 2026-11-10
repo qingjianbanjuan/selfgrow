@@ -401,6 +401,8 @@ class _CommentSheetState extends State<_CommentSheet> {
       headline: c.headline,
       body: c.body,
       highlights: c.highlights,
+      praise: c.praise,
+      reflect: c.reflect,
     );
     if (mounted) setState(() => loading = false);
   }
@@ -525,11 +527,83 @@ class _CommentSheetState extends State<_CommentSheet> {
               s.commentHeadline ?? '',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Text(
               s.commentBody!,
-              style: const TextStyle(fontSize: 13.5, height: 1.6, color: kText),
+              style: const TextStyle(
+                  fontSize: 13.5, height: 1.75, color: kText),
             ),
+
+            // 值得肯定的
+            if ((s.commentPraise ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
+                  decoration: BoxDecoration(
+                    color: kUp.withAlpha(22),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border(
+                      left: BorderSide(color: kUp.withAlpha(160), width: 3),
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(Icons.check_circle_outline,
+                            size: 14, color: kUp),
+                      ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          s.commentPraise!,
+                          style: const TextStyle(
+                              fontSize: 12.5, height: 1.65, color: kText),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // 值得反省的
+            if ((s.commentReflect ?? '').isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD29922).withAlpha(22),
+                    borderRadius: BorderRadius.circular(9),
+                    border: Border(
+                      left: BorderSide(
+                          color: const Color(0xFFD29922).withAlpha(170),
+                          width: 3),
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(Icons.error_outline,
+                            size: 14, color: Color(0xFFD29922)),
+                      ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          s.commentReflect!,
+                          style: const TextStyle(
+                              fontSize: 12.5, height: 1.65, color: kText),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
             if (s.commentHighlights.isNotEmpty) ...[
               const SizedBox(height: 14),
               Wrap(
@@ -552,7 +626,7 @@ class _CommentSheetState extends State<_CommentSheet> {
             ],
             const SizedBox(height: 12),
             Text(
-              'AI 只陈述，不评价、不建议',
+              '评语由 AI 根据今天的数据生成',
               style: TextStyle(fontSize: 10.5, color: kSub.withAlpha(140)),
             ),
           ],

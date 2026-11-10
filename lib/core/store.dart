@@ -26,6 +26,8 @@ class GameStore extends ChangeNotifier {
   // AI 每日评价缓存（按 日期 + 今日记录指纹 失效）
   String? commentHeadline;
   String? commentBody;
+  String? commentPraise;
+  String? commentReflect;
   List<String> commentHighlights = [];
   String? commentDate;
 
@@ -186,6 +188,8 @@ class GameStore extends ChangeNotifier {
         lastDecayAt = _dt(m['decay']);
         commentHeadline = m['ch'] as String?;
         commentBody = m['cb'] as String?;
+        commentPraise = m['cp'] as String?;
+        commentReflect = m['cr'] as String?;
         commentDate = m['cd'] as String?;
         commentFingerprint = m['cf'] as String?;
         commentAt = _dt(m['ca']);
@@ -220,6 +224,8 @@ class GameStore extends ChangeNotifier {
           'decay': lastDecayAt?.millisecondsSinceEpoch,
           'ch': commentHeadline,
           'cb': commentBody,
+          'cp': commentPraise,
+          'cr': commentReflect,
           'chl': commentHighlights,
           'cd': commentDate,
           'cf': commentFingerprint,
@@ -476,9 +482,13 @@ class GameStore extends ChangeNotifier {
     required String headline,
     required String body,
     required List<String> highlights,
+    String? praise,
+    String? reflect,
   }) async {
     commentHeadline = headline;
     commentBody = body;
+    commentPraise = praise;
+    commentReflect = reflect;
     commentHighlights = highlights;
     commentDate = dayKey();
     commentFingerprint = todayFingerprint;
