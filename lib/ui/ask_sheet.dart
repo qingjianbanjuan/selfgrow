@@ -58,6 +58,9 @@ class _AskSheetState extends State<_AskSheet> {
   bool _working = false;
   String? _error;
 
+  /// 自动推断出来的昨晚睡眠
+  SleepVerdict? _sleep;
+
   @override
   void initState() {
     super.initState();
@@ -65,6 +68,34 @@ class _AskSheetState extends State<_AskSheet> {
     if (!_musicOnly) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _judgeUsage());
     }
+    // 睡眠和前台应用无关，总是自己试一下
+    WidgetsBinding.instance.addPostFrameCallback((_) => _detectSleep());
+  }
+
+  /// 只推断「昨晚」的睡眠：从昨天 18:00 到现在
+  /// （午睡之类用户会自己说，不用猜）
+  Future<void> _detectSleep() async {
+    if (!await UsageService.hasPermission()) return;
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final span = await UsageService.detectSleep(
+      since: todayStart.subtract(const Duration(hours: 6)), // 昨天 18:00
+      until: now,
+      // 只认跨过今天凌晨 4 点的那段，白天上班的长空白不算
+      mustContain: GameStore.dayStart(),
+    );
+    if (span == null) return;
+    if (!widget.store.shouldRecordSleepEnd(span.to)) return;
+    if (!mounted) return;
+    setState(() => _sleep = UsageService.judgeSleep(span));
+  }
+
+  /// 睡眠属性的 id（用户可能改过名）
+  String? get _sleepAttrId {
+    for (final a in widget.store.attrs) {
+      if (a.id == 'sleep' || a.name == '睡眠') return a.id;
+    }
+    return null;
   }
 
   @override
@@ -181,6 +212,23 @@ class _AskSheetState extends State<_AskSheet> {
     setState(() => _working = true);
     var count = 0;
 
+    // 0) 昨晚的睡眠（自动推断的，不用人确认）
+    final sv = _sleep;
+    final sleepAttr = _sleepAttrId;
+    if (sv != null && sleepAttr != null && sv.delta != 0) {
+      await widget.store.applyEffects(
+        label: '睡觉 ${sv.span.durationText}',
+        emoji: '😴',
+        effects: [Effect(sleepAttr, sv.delta)],
+        source: 'auto',
+        rawText: '自动推断：${sv.span.clockText}，${sv.reason}',
+        summary: '昨晚睡了 ${sv.span.durationText}',
+        time: sv.span.to,
+      );
+      await widget.store.markSleepRecorded(sv.span.from, sv.span.to);
+      count++;
+    }
+
     if (_musicOnly) {
       // 听歌 + 用户说的活动 → 一起交给 AI 判定
       final j = await AiService.judge(
@@ -275,6 +323,12 @@ class _AskSheetState extends State<_AskSheet> {
                 style: TextStyle(fontSize: 11, color: kSub.withAlpha(190)),
               ),
               const SizedBox(height: 14),
+
+              // ---------- 昨晚睡眠（自动推断）----------
+              if (_sleep != null) ...[
+                _SleepBlock(verdict: _sleep!),
+                const SizedBox(height: 10),
+              ],
 
               // ---------- 使用情况 ----------
               if (!widget.hasUsagePermission) ...[
@@ -651,6 +705,73 @@ class _UsageBlock extends StatelessWidget {
                 }),
               ],
             ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- 昨晚睡眠
+
+class _SleepBlock extends StatelessWidget {
+  final SleepVerdict verdict;
+  const _SleepBlock({required this.verdict});
+
+  @override
+  Widget build(BuildContext context) {
+    final v = verdict;
+    final up = v.delta >= 0;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: kSurface2,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.bedtime_outlined, size: 14, color: kSub),
+              const SizedBox(width: 6),
+              const Text('昨晚睡眠（自动推断）',
+                  style: TextStyle(fontSize: 11.5, color: kSub)),
+              const Spacer(),
+              Text(
+                v.span.durationText,
+                style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: kText),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(v.span.clockText,
+                  style: const TextStyle(fontSize: 12.5, color: kText)),
+              const SizedBox(width: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (up ? kUp : kDown).withAlpha(30),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '睡眠${v.delta >= 0 ? '+' : ''}${v.delta}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: up ? kUp : kDown,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Text(v.reason, style: const TextStyle(fontSize: 11, color: kSub)),
         ],
       ),
     );

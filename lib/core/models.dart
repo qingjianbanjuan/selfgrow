@@ -68,6 +68,10 @@ class Attribute {
   /// 每日自然衰减（能力型是经验点，状态型是数值点），0 = 不衰减
   double decayPerDay;
 
+  /// 状态型默认每天都掉；设为 false 表示「当天有正向记录就不掉」
+  /// 睡眠就是这种：睡够了不该扣
+  bool decayEvenIfLogged;
+
   /// 上次结算衰减的时间
   int? lastDecayAtMs;
 
@@ -82,6 +86,7 @@ class Attribute {
     this.exp = 0,
     this.enabled = true,
     this.decayPerDay = 0,
+    this.decayEvenIfLogged = true,
     this.lastDecayAtMs,
     this.order = 0,
   });
@@ -142,6 +147,7 @@ class Attribute {
         'x': exp,
         'on': enabled ? 1 : 0,
         'd': decayPerDay,
+        'de': decayEvenIfLogged ? 1 : 0,
         'la': lastDecayAtMs,
         'o': order,
       };

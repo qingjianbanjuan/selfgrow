@@ -386,6 +386,7 @@ $table
     required List<AttrGroup> groups,
     String? weather,
     List<AppUsageBrief> usage = const [],
+    String? sleepInfo,
   }) async {
     if (!AiConfig.hasKey) return null;
 
@@ -419,6 +420,7 @@ $logsText
 【当前属性与等级】
 $table
 
+【昨晚睡眠】${sleepInfo ?? '（没检测到）'}
 【今天天气】${weather ?? '（未知）'}
 【手机使用】$usageLine
 

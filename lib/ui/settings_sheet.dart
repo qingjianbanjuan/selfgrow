@@ -5,6 +5,7 @@ import '../core/models.dart';
 import '../core/store.dart';
 import '../core/usage.dart';
 import 'ask_sheet.dart';
+import 'records_page.dart';
 import 'theme.dart';
 
 Future<void> showSettingsSheet(BuildContext context, GameStore store) {
@@ -61,7 +62,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     final since = DateTime.now().subtract(const Duration(hours: 6));
     final hasPerm = await UsageService.hasPermission();
     final usage =
-        hasPerm ? await UsageService.recent(since: since) : <AppUsageBrief>[];
+        hasPerm ? await UsageService.recentExact(since: since) : <AppUsageBrief>[];
     if (!host.mounted) return;
 
     await showAskSheet(
@@ -185,6 +186,29 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 text:
                     '属性 ${widget.store.attrs.length} 个 · 分组 ${widget.store.groups.length} 个 · 记录 ${widget.store.logs.length} 条',
               ),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    final host = widget.hostContext;
+                    Navigator.pop(context);
+                    if (!host.mounted) return;
+                    Navigator.of(host).push(MaterialPageRoute(
+                      builder: (_) => RecordsPage(store: widget.store),
+                    ));
+                  },
+                  icon: const Icon(Icons.list_alt, size: 16),
+                  label: const Text('查看全部记录 / 撤销 / 备份',
+                      style: TextStyle(fontSize: 12.5)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: kText,
+                    side: const BorderSide(color: kSurface2),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               const _InfoRow(
                 icon: Icons.cloud_off_outlined,
                 text: '全部数据只存在本机，没有云端同步',

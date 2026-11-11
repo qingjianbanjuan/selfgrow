@@ -81,4 +81,45 @@ void main() {
       expect(UsageService.totalOf(list).inMinutes, 75);
     });
   });
+
+  group('睡眠判定（睡多久 + 几点睡）', () {
+    // 入睡小时 >= 12 视为「前一天晚上」，否则视为「当天凌晨」
+    SleepSpan span(int sh, int sm, int eh, int em) {
+      final fromDay = sh >= 12 ? 10 : 11; // 11-10 晚 或 11-11 凌晨
+      final from = DateTime(2026, 11, fromDay, sh, sm);
+      final to = DateTime(2026, 11, 11, eh, em);
+      return SleepSpan(from, to);
+    }
+
+    test('22:00 → 06:00（8 小时）=> +12 睡够了', () {
+      final v = UsageService.judgeSleep(span(22, 0, 6, 0));
+      expect(v.span.hours, closeTo(8.0, 0.01));
+      expect(v.delta, 12);
+    });
+
+    test('01:00 → 07:30（6.5 小时）=> +5 勉强够', () {
+      expect(UsageService.judgeSleep(span(1, 0, 7, 30)).delta, 5);
+    });
+
+    test('01:00 → 06:00（5 小时）=> -5 不足', () {
+      expect(UsageService.judgeSleep(span(1, 0, 6, 0)).delta, -5);
+    });
+
+    test('03:00 → 06:00（3 小时）=> -12 严重不足，还额外 -4', () {
+      final v = UsageService.judgeSleep(span(3, 0, 6, 0));
+      expect(v.delta, -16);
+      expect(v.reason, contains('2 点后'));
+    });
+
+    test('00:30 → 08:30（8 小时）=> +12，不算晚睡', () {
+      expect(UsageService.judgeSleep(span(0, 30, 8, 30)).delta, 12);
+    });
+
+    test('01:40 入睡算偏晚', () {
+      final v = UsageService.judgeSleep(span(1, 40, 8, 40));
+      // 7 小时 -> +5，偏晚 -2
+      expect(v.delta, 3);
+      expect(v.reason, contains('偏晚'));
+    });
+  });
 }

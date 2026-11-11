@@ -22,6 +22,8 @@ class GameStore extends ChangeNotifier {
   DateTime? lastAskedAt; // 上次追问时间
   DateTime? lastLoggedAt; // 上次记录时间
   DateTime? lastDecayAt; // 上次衰减结算
+  DateTime? lastSleepStart; // 昨晚入睡时刻（放下手机）
+  DateTime? lastSleepEnd; // 昨晚醒来时刻
 
   // AI 每日评价缓存（按 日期 + 今日记录指纹 失效）
   String? commentHeadline;
@@ -186,6 +188,8 @@ class GameStore extends ChangeNotifier {
         lastAskedAt = _dt(m['asked']);
         lastLoggedAt = _dt(m['logged']);
         lastDecayAt = _dt(m['decay']);
+        lastSleepStart = _dt(m['sleepStart']);
+        lastSleepEnd = _dt(m['sleepEnd']);
         commentHeadline = m['ch'] as String?;
         commentBody = m['cb'] as String?;
         commentPraise = m['cp'] as String?;
@@ -222,6 +226,8 @@ class GameStore extends ChangeNotifier {
           'asked': lastAskedAt?.millisecondsSinceEpoch,
           'logged': lastLoggedAt?.millisecondsSinceEpoch,
           'decay': lastDecayAt?.millisecondsSinceEpoch,
+          'sleepStart': lastSleepStart?.millisecondsSinceEpoch,
+          'sleepEnd': lastSleepEnd?.millisecondsSinceEpoch,
           'ch': commentHeadline,
           'cb': commentBody,
           'cp': commentPraise,
@@ -250,8 +256,11 @@ class GameStore extends ChangeNotifier {
     final windowStart = now.subtract(Duration(days: days));
     for (final a in attrs) {
       if (a.decayPerDay <= 0) continue;
-      if (!a.decayAlways) {
-        // 积累型：窗口内有正向增长就不掉
+      // 窗口内有没有正向记录
+      // - 能力型：有正向增长就不掉
+      // - 状态型：默认照掉；但 decayEvenIfLogged=false 的（如睡眠）有记录就不掉
+      final needCheck = !a.decayAlways || !a.decayEvenIfLogged;
+      if (needCheck) {
         var hasPositive = false;
         for (final l in logs) {
           if (l.time.isBefore(windowStart)) continue;
@@ -435,9 +444,108 @@ class GameStore extends ChangeNotifier {
     return DateTime.now().difference(s);
   }
 
+  /// 这段睡眠是不是还没记过
+  bool shouldRecordSleepEnd(DateTime sleepTo) {
+    final last = lastSleepEnd;
+    if (last == null) return true;
+    // 至少要比上次记录的时间晚 30 分钟，才算新的一段睡眠
+    return sleepTo.difference(last) > const Duration(minutes: 30);
+  }
+
+  /// 保存昨晚这段睡眠（更晚的覆盖旧的）
+  Future<void> markSleepRecorded(DateTime sleepFrom, DateTime sleepTo) async {
+    lastSleepStart = sleepFrom;
+    lastSleepEnd = sleepTo;
+    await save();
+  }
+
+  /// 上次保存的睡眠文本，如「02:10 → 08:40（6 小时 30 分）」
+  String? get savedSleepText {
+    final a = lastSleepStart;
+    final b = lastSleepEnd;
+    if (a == null || b == null) return null;
+    final d = b.difference(a);
+    if (d.inMinutes < 30) return null;
+    String hhmm(DateTime x) =>
+        '${x.hour.toString().padLeft(2, '0')}:${x.minute.toString().padLeft(2, '0')}';
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    final dur = h <= 0 ? '$m 分钟' : (m > 0 ? '$h 小时 $m 分' : '$h 小时');
+    return '${hhmm(a)} 放下手机 → ${hhmm(b)} 拿起（$dur）';
+  }
+
   Future<void> markAsked() async {
     lastAskedAt = DateTime.now();
     await save();
+  }
+
+  // ---------------- 快照导出 / 导入 ----------------
+
+  /// 完整快照（JSON 文本）
+  String exportSnapshot() {
+    return const JsonEncoder.withIndent('  ').convert({
+      'version': 1,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'groups': groups.map((e) => e.toJson()).toList(),
+      'attrs': attrs.map((e) => e.toJson()).toList(),
+      'actions': actions.map((e) => e.toJson()).toList(),
+      'logs': logs.map((e) => e.toJson()).toList(),
+      'meta': {
+        'asked': lastAskedAt?.millisecondsSinceEpoch,
+        'logged': lastLoggedAt?.millisecondsSinceEpoch,
+        'decay': lastDecayAt?.millisecondsSinceEpoch,
+        'sleepEnd': lastSleepEnd?.millisecondsSinceEpoch,
+      },
+    });
+  }
+
+  /// 从快照恢复（覆盖当前全部数据）
+  Future<bool> importSnapshot(String raw) async {
+    try {
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+
+      final attrList = (j['attrs'] as List?) ?? [];
+      if (attrList.isEmpty) return false;
+
+      final groupList = (j['groups'] as List?) ?? [];
+      groups = groupList
+          .map((e) => AttrGroup.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      attrs = attrList
+          .map((e) => Attribute.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+
+      final actionList = (j['actions'] as List?) ?? [];
+      if (actionList.isNotEmpty) {
+        actions = actionList
+            .map((e) => ActionDef.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList();
+      }
+
+      final logList = (j['logs'] as List?) ?? [];
+      logs = logList
+          .map((e) => LogEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+
+      final m = j['meta'];
+      if (m is Map<String, dynamic>) {
+        lastAskedAt = _dt(m['asked']);
+        lastLoggedAt = _dt(m['logged']);
+        lastDecayAt = _dt(m['decay']);
+        lastSleepStart = _dt(m['sleepStart']);
+        lastSleepEnd = _dt(m['sleepEnd']);
+      }
+
+      if (groups.isEmpty) groups = defaultGroups();
+      if (actions.isEmpty) actions = defaultActions();
+
+      await save();
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('[selfgrow] import failed: $e');
+      return false;
+    }
   }
 
   // ---------------- AI 评价缓存 ----------------

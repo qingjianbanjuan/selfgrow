@@ -37,6 +37,7 @@ Future<void> main() async {
     UsageService.prefetch(since: askSince);
   }
   _selfCheckAi(store);
+  _selfCheckWindow(store);
 
   runApp(SelfGrowApp(store: store));
 }
@@ -124,4 +125,33 @@ Future<void> _selfCheckAi(GameStore store) async {
   }
 
   debugPrint('[selfgrow] === 自检结束 ===');
+}
+
+/// 自检：验证「今天 4 点截断」和「睡眠推断」
+Future<void> _selfCheckWindow(GameStore store) async {
+  final dayStart = GameStore.dayStart();
+  debugPrint('[selfgrow] === 时间窗口自检 ===');
+  debugPrint('[selfgrow] 今天起点 = $dayStart（应该是今天 04:00）');
+
+  final today = await UsageService.recentExact(since: dayStart, limit: 8);
+  debugPrint('[selfgrow] 今天(4点后)的使用 ${today.length} 项:');
+  for (final u in today) {
+    debugPrint('[selfgrow]   ${u.label}');
+  }
+
+  final now = DateTime.now();
+  final todayStart = DateTime(now.year, now.month, now.day);
+  final span = await UsageService.detectSleep(
+    since: todayStart.subtract(const Duration(hours: 6)),
+    until: now,
+    mustContain: GameStore.dayStart(),
+  );
+  if (span == null) {
+    debugPrint('[selfgrow] 睡眠: 没检测到（昨晚没有跨 4 点的 >=3 小时空白）');
+  } else {
+    final v = UsageService.judgeSleep(span);
+    debugPrint('[selfgrow] 睡眠: ${span.clockText} 共 ${span.durationText}'
+        ' -> 睡眠${v.delta >= 0 ? '+' : ''}${v.delta}（${v.reason}）');
+  }
+  debugPrint('[selfgrow] === 自检结束 ==='.replaceAll('自检结束', '窗口自检结束'));
 }

@@ -9,6 +9,7 @@ import 'ask_sheet.dart';
 import 'avatar.dart';
 import 'detail_page.dart';
 import 'record_sheet.dart';
+import 'records_page.dart';
 import 'settings_sheet.dart';
 import 'theme.dart';
 
@@ -20,12 +21,29 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  bool _askedThisLaunch = false;
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  /// 面板是否开着（防止重复弹）
+  bool _askOpen = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _loadWeather();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAsk());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // 关键：从后台切回来时 initState 不会再跑，
+    // 必须在这里重新检查一次，否则"没杀后台"就永远不会问
     _loadWeather();
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAsk());
   }
@@ -36,10 +54,9 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() {});
   }
 
-  /// 打开 App 时：距上一条记录 >= 30 分钟才问
+  /// 打开 / 切回 App 时：距上一条记录 >= 30 分钟才问
   Future<void> _maybeAsk() async {
-    if (_askedThisLaunch) return;
-    _askedThisLaunch = true;
+    if (_askOpen) return;
     final store = widget.store;
     if (!store.loaded) return;
     if (!store.shouldAsk) return;
@@ -50,17 +67,22 @@ class _HomePageState extends State<HomePage> {
     // 启动时已经预取过，这里直接拿（几乎立即返回）
     final hasPerm = await UsageService.hasPermission();
     final usage =
-        hasPerm ? await UsageService.prefetch(since: since) : <AppUsageBrief>[];
+        hasPerm ? await UsageService.recentExact(since: since) : <AppUsageBrief>[];
     if (!mounted) return;
 
     // 面板自己会：自动判定手机那段 → 直接记上 → 只问手机之外的时间
-    await showAskSheet(
-      context,
-      store,
-      since: since,
-      usage: usage,
-      hasUsagePermission: hasPerm,
-    );
+    _askOpen = true;
+    try {
+      await showAskSheet(
+        context,
+        store,
+        since: since,
+        usage: usage,
+        hasUsagePermission: hasPerm,
+      );
+    } finally {
+      _askOpen = false;
+    }
   }
 
   /// 状态：心情 / 睡眠 / 体力 的平均
@@ -296,9 +318,20 @@ class _Footer extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: Column(
         children: [
-          Text(
-            today == 0 ? '今天还没有记录' : '今天 $today 件事',
-            style: const TextStyle(fontSize: 12, color: kSub),
+          InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => RecordsPage(store: store),
+            )),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              child: Text(
+                today == 0
+                    ? '今天还没有记录 · 点这里看全部'
+                    : '今天 $today 件事 · 点这里看全部',
+                style: const TextStyle(fontSize: 12, color: kSub),
+              ),
+            ),
           ),
           const SizedBox(height: 9),
           Row(
@@ -378,8 +411,9 @@ class _CommentSheetState extends State<_CommentSheet> {
 
     final since = GameStore.dayStart();
     final hasPerm = await UsageService.hasPermission();
+    // 必须用事件精确计时：日聚合会把凌晨 4 点前的使用算进今天
     final usage = hasPerm
-        ? await UsageService.recent(since: since, limit: 8)
+        ? await UsageService.recentExact(since: since, limit: 8)
         : <AppUsageBrief>[];
 
     final c = await AiService.dailyComment(
@@ -388,6 +422,8 @@ class _CommentSheetState extends State<_CommentSheet> {
       groups: widget.store.groups,
       weather: WeatherService.cached?.forAi,
       usage: usage,
+      // 昨晚睡了多久、几点放下手机 —— 直接影响今天的状态
+      sleepInfo: widget.store.savedSleepText,
     );
     if (!mounted) return;
     if (c == null) {

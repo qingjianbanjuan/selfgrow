@@ -20,6 +20,9 @@ class AttrSeed {
   /// 初始值：状态型默认 60（及格线），能力型默认 0
   final int initExp;
 
+  /// 是否「当天有记录就不衰减」（睡眠用）
+  final bool decayEvenIfLogged;
+
   const AttrSeed(
     this.id,
     this.groupId,
@@ -28,6 +31,7 @@ class AttrSeed {
     this.kind, {
     this.decay = 0,
     int? initExp,
+    this.decayEvenIfLogged = true,
   }) : initExp = initExp ??
             (kind == AttrKind.state ? kStateInitial : kAbilityInitial);
 }
@@ -101,7 +105,9 @@ List<AttrSeed> defaultAttrSeeds() => const [
       AttrSeed('willpower', 'emotion', '意志', '🔥', AttrKind.state, decay: 3),
 
       // ===== 生活 =====
-      AttrSeed('sleep', 'life', '睡眠', '😴', AttrKind.state, decay: 10),
+      // 睡眠特殊：当天有睡眠记录就不衰减（睡够了不该扣）
+      AttrSeed('sleep', 'life', '睡眠', '😴', AttrKind.state,
+          decay: 10, decayEvenIfLogged: false),
       AttrSeed('diet', 'life', '饮食', '🍚', AttrKind.state, decay: 5),
       AttrSeed('finance', 'life', '财务', '💰', AttrKind.ability, decay: 0.5),
       AttrSeed('order', 'life', '秩序', '🧹', AttrKind.ability, decay: 1.5),
@@ -129,6 +135,7 @@ List<Attribute> attributesFromSeeds() {
       kind: s.kind,
       exp: s.initExp,
       decayPerDay: s.decay,
+      decayEvenIfLogged: s.decayEvenIfLogged,
       order: i,
     ));
   }
