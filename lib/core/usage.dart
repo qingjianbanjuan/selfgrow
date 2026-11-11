@@ -266,6 +266,13 @@ class UsageService {
     }
   }
 
+  /// 窗口内所有 App 的前台总时长（精确，按事件算）
+  /// 用来喂给 AI 当"今天屏幕时长"，避免它自己编一个数
+  static Future<Duration> totalScreenTime({required DateTime since}) async {
+    final list = await recentExact(since: since, limit: 300, minSeconds: 1);
+    return totalOf(list);
+  }
+
   // ---------------- 睡眠推断 ----------------
 
   /// 找出 [since, until] 内最长的一段"手机没动"，

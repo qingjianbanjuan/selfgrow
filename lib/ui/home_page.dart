@@ -415,6 +415,9 @@ class _CommentSheetState extends State<_CommentSheet> {
     final usage = hasPerm
         ? await UsageService.recentExact(since: since, limit: 8)
         : <AppUsageBrief>[];
+    // 精确总时长 —— 给 AI 一个真实数字，它就不必自己编了
+    final totalScreen =
+        hasPerm ? await UsageService.totalScreenTime(since: since) : null;
 
     final c = await AiService.dailyComment(
       todayLogs: widget.store.logsToday,
@@ -424,6 +427,9 @@ class _CommentSheetState extends State<_CommentSheet> {
       usage: usage,
       // 昨晚睡了多久、几点放下手机 —— 直接影响今天的状态
       sleepInfo: widget.store.savedSleepText,
+      sleepDuration: widget.store.savedSleepDuration,
+      // 真实总时长，AI 只能引用它，不许自己编
+      totalScreen: totalScreen,
     );
     if (!mounted) return;
     if (c == null) {

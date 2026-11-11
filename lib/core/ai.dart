@@ -242,7 +242,9 @@ $table
 6. 负面后果必须如实输出：运动后卫生下降、熬夜后体力下降、久坐后体力下降、
    长时间打游戏后专注和体力下降但心情上升等
 7. 若事件涉及某个重要方面但属性表里完全没有对应，放进 suggest_attrs（最多 2 个）
-8. summary ≤ 15 字；emoji 一个字符
+8. summary ≤ 15 字；emoji 一个字符。
+   **summary 里不许出现任何时长数字**（不许"刷手机12小时"这种），
+   只说做了什么（"刷手机"/"学英语"/"跑步"）。时长由界面另外显示。
 9. worth_recording：只标记这件事是否琐碎，**不影响 effects 的计算**
 10. 输出 duration_minutes：你实际采用的事件时长（整数分钟）
 
@@ -380,6 +382,73 @@ $table
 
   // ---------------- 每日评价 ----------------
 
+  /// "7 小时 38 分" / "45 分钟"
+  static String _durText(Duration d) {
+    final h = d.inMinutes ~/ 60;
+    final m = d.inMinutes % 60;
+    if (h == 0) return '$m 分钟';
+    return m > 0 ? '$h 小时 $m 分' : '$h 小时';
+  }
+
+  /// 把一个时长登记进「可引用数字」白名单
+  static void _allowDuration(Set<String> allow, Duration d) {
+    final total = d.inMinutes;
+    allow.add('$total'); // 分钟总数
+    allow.add('${d.inHours}'); // 小时部分
+    allow.add('${d.inMinutes % 60}'); // 分钟部分
+    final dec = total / 60.0;
+    allow.add(dec.toStringAsFixed(1)); // 7.6
+    allow.add(dec.toStringAsFixed(0)); // 8
+  }
+
+
+  static final _durRe = RegExp(r'(\d+(?:\.\d+)?)\s*(?:小时|分钟|分|h|min)');
+  static final _timeRe = RegExp(r'(\d{1,2}):(\d{2})');
+
+  /// 这段文本里的「X 小时 / X 分钟 / HH:MM」是不是都在白名单里。
+  ///
+  /// 关键：**时长必须来自真实时长集合**（durAllow），
+  /// 不能因为某个属性的增减恰好是 12，就放行"12 小时"。
+  static bool _grounded(
+      String text, Set<String> durAllow, Set<String> timeAllow) {
+    for (final m in _durRe.allMatches(text)) {
+      if (!durAllow.contains(m.group(1)!)) return false;
+    }
+    for (final m in _timeRe.allMatches(text)) {
+      final hh = int.tryParse(m.group(1)!) ?? -1;
+      final mm = m.group(2)!;
+      if (hh < 0 || hh > 23) continue; // 不是时间，跳过
+      final key = '${hh.toString().padLeft(2, '0')}:$mm';
+      final key2 = '$hh:$mm';
+      if (!timeAllow.contains(key) && !timeAllow.contains(key2)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// 把含未授权数字的句子剔掉（按句切断，保留符号）
+  static String _scrub(
+      String text, Set<String> durAllow, Set<String> timeAllow) {
+    if (text.isEmpty) return text;
+    final out = <String>[];
+    final buf = StringBuffer();
+    for (final ch in text.split('')) {
+      buf.write(ch);
+      if ('。！？；\n'.contains(ch)) {
+        final s = buf.toString();
+        if (_grounded(s, durAllow, timeAllow)) out.add(s);
+        buf.clear();
+      }
+    }
+    final tail = buf.toString();
+    if (tail.trim().isNotEmpty &&
+        _grounded(tail, durAllow, timeAllow)) {
+      out.add(tail);
+    }
+    return out.join().trim();
+  }
+
   static Future<DailyComment?> dailyComment({
     required List<LogEntry> todayLogs,
     required List<Attribute> attrs,
@@ -387,10 +456,18 @@ $table
     String? weather,
     List<AppUsageBrief> usage = const [],
     String? sleepInfo,
+    Duration? sleepDuration,
+    Duration? totalScreen,
   }) async {
     if (!AiConfig.hasKey) return null;
 
     final table = renderAttrTable(attrs, groups);
+
+    // ---------- 1. 白名单：时长 和 时间点 分开收集 ----------
+    // 关键：时长只能来自真实时长，绝不能因为某个属性增减恰好是 12
+    // 就放行"12 小时"（之前就是这么漏的）
+    final durAllow = <String>{}; // 真实时长
+    final timeAllow = <String>{}; // 真实时间点
 
     final logsText = todayLogs.isEmpty
         ? '（今天还没有任何记录）'
@@ -399,6 +476,7 @@ $table
             .map((l) {
               final t =
                   '${l.time.hour.toString().padLeft(2, '0')}:${l.time.minute.toString().padLeft(2, '0')}';
+              timeAllow.add(t);
               final eff = l.effects.map((e) {
                 final a = attrs.where((x) => x.id == e.attrId).toList();
                 final n = a.isEmpty ? e.attrId : a.first.name;
@@ -408,11 +486,46 @@ $table
             })
             .join('\n');
 
+    // 属性今日累计变化（AI 引用"专注-14"是允许的 —— 那是真实求和）
+    final sums = <String, int>{};
+    for (final l in todayLogs) {
+      for (final e in l.effects) {
+        sums[e.attrId] = (sums[e.attrId] ?? 0) + e.delta;
+      }
+    }
+
+    // 屏幕总时长
+    if (totalScreen != null) _allowDuration(durAllow, totalScreen);
+
+    // 各 App
+    final appFacts = <String>[];
+    for (final u in usage.take(8)) {
+      _allowDuration(durAllow, u.duration);
+      appFacts.add('${u.appName} ${_durText(u.duration)}');
+    }
+
+    // 睡眠时长
+    if (sleepDuration != null) _allowDuration(durAllow, sleepDuration);
+
+    // ---------- 2. 事实清单，明确给 AI ----------
+    final facts = <String>[
+      if (totalScreen != null)
+        '今天屏幕总时长 ${_durText(totalScreen)}（${totalScreen.inMinutes} 分钟）',
+      if (sleepInfo != null) '昨晚睡眠 $sleepInfo',
+      '今天记录 ${todayLogs.length} 条',
+      if (appFacts.isNotEmpty) '各 App：${appFacts.join('、')}',
+      if (sums.isNotEmpty)
+        '今日属性累计：${sums.entries.map((e) {
+          final n = attrs.where((a) => a.id == e.key);
+          return '${n.isEmpty ? e.key : n.first.name}${e.value >= 0 ? '+' : ''}${e.value}';
+        }).join('、')}',
+    ].join('\n');
+
     final usageLine = renderUsage(usage);
 
     final system = '''
 你在给这个人写一天的「每日评语」。你了解他的全部数据，可以有自己的判断和态度。
-写给深夜的他看，要**像朋友说实话**，不像客服发通知。
+写给深夜的他看，要像朋友说实话，不像客服发通知。
 
 【今天的时间线与属性变化】
 $logsText
@@ -420,61 +533,148 @@ $logsText
 【当前属性与等级】
 $table
 
+【真实数据（唯一允许引用的数字）】
+$facts
 【昨晚睡眠】${sleepInfo ?? '（没检测到）'}
 【今天天气】${weather ?? '（未知）'}
 【手机使用】$usageLine
 
+**最硬的规矩：数字只能从上表抄，一个都不许自己算、不许估、不许编。**
+- 不许多报时长（比如表里没有"12 小时"这种数，就绝对不许写）
+- 不许把"刷了几次"换算成"刷了几小时"
+- 拿不准就不写数字，只描述趋势
+- 编造数字是最严重的错误，比写得不精彩严重一百倍
+
 怎么写：
-1. headline：≤ 14 字，一句话定性，要有观点（可以犀利、可以惋惜、可以替他高兴）
-2. body：**180 ~ 320 字**，这是主体。要写清：
-   - 今天实际发生了什么（挑最有代表性的两三件，用具体数字和时间）
-   - 这些事让他哪些属性涨了、哪些掉了，掉了多少
-   - 你对他这一天的真实看法 —— 好在哪、差在哪
-   **宁可具体到有点扎心，也不要空洞的漂亮话**
-3. praise：1~2 句，今天真正值得肯定的地方。必须对应到具体事实，没有就留空字符串
-4. reflect：1~2 句，今天值得反省的地方。可以说得直白、可以点破他自己在回避的事，
-   但**不要说教**（不许出现"你应该""建议你""要加油"）
-5. highlights：3~5 条，纯事实 + 数字，给别人一眼看懂今天什么样
-6. 激励不靠口号。让"具体的事实 + 你的态度"本身起作用
-   —— 比如"这周你第一次连续三天碰书"，比"继续努力"有力一百倍
-7. **不许编造**：所有判断都必须能对应到上面的数据，没记录的事不许猜
-8. 可以主观，可以有情绪，可以调侃，但**不能伤人**
-9. 只输出 JSON
+1. headline：≤ 14 字，一句话定性，要有观点
+2. body：**180 ~ 320 字**。写清今天实际发生了什么（用上面的真实数字和时间）、
+   属性怎么涨跌、你对他这一天的真实看法。**宁可具体到扎心，也不要空洞的漂亮话**
+3. praise：1~2 句，今天真正值得肯定的地方，必须有依据，没有就留空字符串
+4. reflect：1~2 句，值得反省的地方，可以直白，但不要说教
+   （不许出现"你应该""建议你""要加油"）
+5. highlights：3~5 条，纯事实 + 数字，**数字同样只能来自上表**
+6. 激励不靠口号，靠"具体的事实 + 你的态度"
+7. 可以主观，可以有情绪，可以调侃，但**不能伤人**
+8. 只输出 JSON
 
 输出格式：
-{"headline":"身体动了，脑子没动",
- "body":"今天你跑了 30 分钟，体力从 62 拉到 71，这是这两天最有价值的一段时间。但一整天没翻开过书，阅读停在 Lv1 已经第 9 天了。晚上 11 点后还在刷视频，专注又掉了 4 点。你不是没时间，是把时间都给了屏幕。",
- "praise":"跑步那一趟是真的，热天能出门不容易。",
- "reflect":"连续 9 天没读书了。你自己也知道这不对劲。",
- "highlights":["运动 32 分钟","阅读 0 分钟","屏幕 7.0 小时","专注 -8"]}
+{"headline":"一句话定性",
+ "body":"180-320 字的评语",
+ "praise":"值得肯定的",
+ "reflect":"值得反省的",
+ "highlights":["事实1","事实2","事实3"]}
 ''';
 
-    final content = await _chat(system, '请写今天的评语。');
-    if (content == null) return null;
-    try {
-      final j = _parseLoose(content);
-      if (j == null) {
-        debugPrint('[selfgrow] dailyComment: JSON 非法');
-        return null;
-      }
-      final h = (j['highlights'] as List? ?? [])
-          .map((e) => e.toString())
-          .toList();
+    // ---------- 3. 生成 + 校验 + 重试 ----------
+    DailyComment? build(Map<String, dynamic> j) {
       String? opt(String k) {
         final v = (j[k] ?? '').toString().trim();
         return v.isEmpty ? null : v;
       }
 
+      final body = _scrub((j['body'] ?? '').toString(), durAllow, timeAllow);
+      // 剔完太短 = 大部分内容都是编的，判失败
+      if (body.length < 40 && (j['body'] ?? '').toString().length > 60) {
+        debugPrint('[selfgrow] dailyComment: 正文被剔空，判为幻觉');
+        return null;
+      }
+
+      final hs = (j['highlights'] as List? ?? [])
+          .map((e) => e.toString())
+          .where((s) => _grounded(s, durAllow, timeAllow))
+          .toList();
+
       return DailyComment(
         (j['headline'] ?? '').toString(),
-        (j['body'] ?? '').toString(),
-        h,
-        praise: opt('praise'),
-        reflect: opt('reflect'),
+        body,
+        hs,
+        praise: opt('praise') == null
+            ? null
+            : _scrub(opt('praise')!, durAllow, timeAllow),
+        reflect: opt('reflect') == null
+            ? null
+            : _scrub(opt('reflect')!, durAllow, timeAllow),
       );
-    } catch (e) {
-      debugPrint('[selfgrow] dailyComment JSON parse failed: $e');
-      return null;
     }
+
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final sys = attempt == 0
+          ? system
+          : '$system\n\n【上一次的回答里出现了表里没有的数字，这是严重错误。'
+              '这一次请只用【真实数据】里出现过的数字。】';
+      final content = await _chat(sys, '请写今天的评语。');
+      if (content == null) continue;
+      final j = _parseLoose(content);
+      if (j == null) {
+        debugPrint('[selfgrow] dailyComment: JSON 非法（第 ${attempt + 1} 次）');
+        continue;
+      }
+      final c = build(j);
+      if (c != null && c.body.trim().length >= 40) {
+        debugPrint('[selfgrow] dailyComment OK（第 ${attempt + 1} 次）');
+        return c;
+      }
+    }
+
+    // ---------- 4. 兜底：本地按事实拼，绝不含编造数字 ----------
+    debugPrint('[selfgrow] dailyComment: 两次都不可信，用本地事实拼');
+    return _localComment(todayLogs, attrs, usage, sleepInfo, totalScreen);
+  }
+
+  /// 完全由本地数据拼出来的评语（没有 AI 发挥，因此不可能编造）
+  static DailyComment _localComment(
+    List<LogEntry> logs,
+    List<Attribute> attrs,
+    List<AppUsageBrief> usage,
+    String? sleepInfo,
+    Duration? totalScreen,
+  ) {
+    final sums = <String, int>{};
+    final names = <String, String>{};
+    for (final l in logs) {
+      for (final e in l.effects) {
+        sums[e.attrId] = (sums[e.attrId] ?? 0) + e.delta;
+        final a = attrs.where((x) => x.id == e.attrId);
+        if (a.isNotEmpty) names[e.attrId] = a.first.name;
+      }
+    }
+
+    final sb = StringBuffer();
+    if (totalScreen != null) {
+      sb.write('今天屏幕时长 ${_durText(totalScreen)}。');
+    }
+    sb.write('记录了 ${logs.length} 条。');
+    if (sleepInfo != null) sb.write('昨晚：$sleepInfo。');
+
+    final parts = sums.entries.toList()
+      ..sort((a, b) => b.value.abs().compareTo(a.value.abs()));
+    if (parts.isNotEmpty) {
+      sb.write('变化最大的：');
+      sb.write(parts
+          .take(4)
+          .map((e) =>
+              '${names[e.key] ?? e.key}${e.value >= 0 ? '+' : ''}${e.value}')
+          .join('、'));
+      sb.write('。');
+    }
+    if (usage.isNotEmpty) {
+      sb.write('手机主要用在 ${usage.first.appName}（${_durText(usage.first.duration)}）。');
+    }
+
+    final hs = <String>[
+      if (totalScreen != null) '屏幕 ${_durText(totalScreen)}',
+      '记录 ${logs.length} 条',
+      if (sleepInfo != null) '睡眠 $sleepInfo',
+      ...parts.take(2).map((e) =>
+          '${names[e.key] ?? e.key}${e.value >= 0 ? '+' : ''}${e.value}'),
+    ];
+
+    return DailyComment(
+      '今天的账',
+      sb.toString(),
+      hs,
+      reflect: null,
+      praise: null,
+    );
   }
 }

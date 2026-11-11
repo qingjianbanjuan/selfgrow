@@ -459,6 +459,15 @@ class GameStore extends ChangeNotifier {
     await save();
   }
 
+  /// 上次保存的睡眠时长
+  Duration? get savedSleepDuration {
+    final a = lastSleepStart;
+    final b = lastSleepEnd;
+    if (a == null || b == null) return null;
+    final d = b.difference(a);
+    return d.inMinutes < 30 ? null : d;
+  }
+
   /// 上次保存的睡眠文本，如「02:10 → 08:40（6 小时 30 分）」
   String? get savedSleepText {
     final a = lastSleepStart;
