@@ -29,13 +29,7 @@ Future<void> main() async {
 
   // 自检：确认使用统计能读到数据（结果打到 logcat）
   _selfCheckUsage();
-  // 打开 App 的第一件事：先查「上次记录到现在」的手机使用记录（预取）。
-  // 这样追问弹窗能立刻把使用明细摆出来，不用等查询。
-  final askSince = store.askSince;
-  if (store.shouldAsk && askSince != null) {
-    debugPrint('[selfgrow] 预取使用记录：$askSince -> now');
-    UsageService.prefetch(since: askSince);
-  }
+
   _selfCheckAi(store);
   _selfCheckWindow(store);
 
@@ -63,7 +57,7 @@ Future<void> _selfCheckUsage() async {
     final ok = await UsageService.hasPermission(force: true);
     debugPrint('[selfgrow] usage permission = $ok');
     if (!ok) return;
-    final list = await UsageService.recent(
+    final list = await UsageService.recentExact(
       since: DateTime.now().subtract(const Duration(hours: 6)),
       limit: 8,
     );
@@ -133,9 +127,14 @@ Future<void> _selfCheckWindow(GameStore store) async {
   debugPrint('[selfgrow] === 时间窗口自检 ===');
   debugPrint('[selfgrow] 今天起点 = $dayStart（应该是今天 04:00）');
 
-  final today = await UsageService.recentExact(since: dayStart, limit: 8);
-  debugPrint('[selfgrow] 今天(4点后)的使用 ${today.length} 项:');
-  for (final u in today) {
+  // 两个口径对账：系统的天级值 vs 我自己按事件拼的
+  await UsageService.crossCheck(dayStart: dayStart);
+
+  final sys = await UsageService.systemToday();
+  debugPrint('[selfgrow] 系统口径：总 ${sys.total.inHours}h'
+      '${(sys.total.inMinutes % 60).toString().padLeft(2, '0')}m，'
+      '${sys.apps.length} 个 App');
+  for (final u in sys.apps) {
     debugPrint('[selfgrow]   ${u.label}');
   }
 
@@ -144,7 +143,7 @@ Future<void> _selfCheckWindow(GameStore store) async {
   final span = await UsageService.detectSleep(
     since: todayStart.subtract(const Duration(hours: 6)),
     until: now,
-    mustContain: GameStore.dayStart(),
+    mustContain: GameStore.sleepAnchor(),
   );
   if (span == null) {
     debugPrint('[selfgrow] 睡眠: 没检测到（昨晚没有跨 4 点的 >=3 小时空白）');

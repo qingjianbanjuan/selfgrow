@@ -82,7 +82,7 @@ class _AskSheetState extends State<_AskSheet> {
       since: todayStart.subtract(const Duration(hours: 6)), // 昨天 18:00
       until: now,
       // 只认跨过今天凌晨 4 点的那段，白天上班的长空白不算
-      mustContain: GameStore.dayStart(),
+      mustContain: GameStore.sleepAnchor(),
     );
     if (span == null) return;
     if (!widget.store.shouldRecordSleepEnd(span.to)) return;

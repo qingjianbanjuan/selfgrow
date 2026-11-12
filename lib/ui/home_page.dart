@@ -411,13 +411,18 @@ class _CommentSheetState extends State<_CommentSheet> {
 
     final since = GameStore.dayStart();
     final hasPerm = await UsageService.hasPermission();
-    // 必须用事件精确计时：日聚合会把凌晨 4 点前的使用算进今天
-    final usage = hasPerm
-        ? await UsageService.recentExact(since: since, limit: 8)
-        : <AppUsageBrief>[];
-    // 精确总时长 —— 给 AI 一个真实数字，它就不必自己编了
-    final totalScreen =
-        hasPerm ? await UsageService.totalScreenTime(since: since) : null;
+
+    // 口径 A：系统天级值 —— 和「健康使用设备」同源同口径，总账用它
+    final sys = await UsageService.systemToday();
+    var usage = sys.apps;
+    Duration? totalScreen = sys.total == Duration.zero ? null : sys.total;
+
+    // 系统值拿不到时，退回事件流兜底
+    if (usage.isEmpty && hasPerm) {
+      usage = await UsageService.recentExact(since: since, limit: 8);
+      final byEvents = await UsageService.totalByEvents(since: since);
+      totalScreen = byEvents == Duration.zero ? null : byEvents;
+    }
 
     final c = await AiService.dailyComment(
       todayLogs: widget.store.logsToday,

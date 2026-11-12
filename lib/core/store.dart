@@ -39,8 +39,17 @@ class GameStore extends ChangeNotifier {
 
   bool loaded = false;
 
-  /// 每天 4:00 作为分界（凌晨记的事算前一天）
+  /// 「今天」= 自然日 0:00
+  /// （用自然日是为了和「健康使用设备」的屏幕时长同口径，能对得上账）
   static DateTime dayStart([DateTime? t]) {
+    final now = t ?? DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  /// 睡眠锚点：固定凌晨 4:00，**不跟 dayStart 走**。
+  /// 因为要找的是"跨夜的那段空白"：
+  /// 02:00 睡到 09:00 的空档不含 0:00，但含 4:00 —— 用 0:00 会漏掉。
+  static DateTime sleepAnchor([DateTime? t]) {
     final now = t ?? DateTime.now();
     final d = DateTime(now.year, now.month, now.day, 4);
     return now.isBefore(d) ? d.subtract(const Duration(days: 1)) : d;
