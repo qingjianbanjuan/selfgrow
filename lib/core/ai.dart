@@ -117,7 +117,7 @@ class AiService {
 
     final parts = <String>[];
     if (screen.isNotEmpty) {
-      parts.add(screen.take(8).map((u) => u.label).join('、'));
+      parts.add(screen.take(12).map((u) => u.label).join('、'));
     }
     if (bg.isNotEmpty) {
       parts.add(
@@ -499,7 +499,7 @@ $table
 
     // 各 App
     final appFacts = <String>[];
-    for (final u in usage.take(8)) {
+    for (final u in usage.take(12)) {
       _allowDuration(durAllow, u.duration);
       appFacts.add('${u.appName} ${_durText(u.duration)}');
     }

@@ -639,7 +639,15 @@ class _UsageBlock extends StatelessWidget {
             const Text('这段没有占注意力的使用',
                 style: TextStyle(fontSize: 11.5, color: kSub))
           else
-            ...screen.take(6).map((u) => _barRow(u, maxMs)),
+            ...screen.take(10).map((u) => _barRow(u, maxMs)),
+            if (screen.length > 10)
+              Padding(
+                padding: const EdgeInsets.only(top: 2, bottom: 6),
+                child: Text(
+                  '还有 ${screen.length - 10} 个更少的没列出',
+                  style: const TextStyle(fontSize: 10.5, color: kSub),
+                ),
+              ),
 
           if (music.isNotEmpty) ...[
             const SizedBox(height: 8),

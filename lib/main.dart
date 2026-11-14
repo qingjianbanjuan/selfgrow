@@ -130,6 +130,17 @@ Future<void> _selfCheckWindow(GameStore store) async {
   // 两个口径对账：系统的天级值 vs 我自己按事件拼的
   await UsageService.crossCheck(dayStart: dayStart);
 
+  // 今日完整排行（不截断），用来核对某个 App 为什么没显示
+  final all = await UsageService.recentExact(
+    since: dayStart,
+    limit: 60,
+    minSeconds: 1,
+  );
+  debugPrint('[selfgrow] 今日完整排行（${all.length} 个）:');
+  for (final u in all) {
+    debugPrint('[selfgrow]   [${u.duration.inMinutes}分] ${u.appName} (${u.packageName})');
+  }
+
   final sys = await UsageService.systemToday();
   debugPrint('[selfgrow] 系统口径：总 ${sys.total.inHours}h'
       '${(sys.total.inMinutes % 60).toString().padLeft(2, '0')}m，'

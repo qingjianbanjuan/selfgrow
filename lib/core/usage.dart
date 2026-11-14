@@ -179,7 +179,7 @@ class UsageService {
   /// 3. **熄屏 / 锁屏时结算所有开着的区间** —— 否则"看视频睡着"会算到天亮
   static Future<List<AppUsageBrief>> recentExact({
     required DateTime since,
-    int limit = 8,
+    int limit = 12,
     int minSeconds = 60,
     Duration lookback = const Duration(hours: 6),
   }) async {
