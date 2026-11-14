@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:usage_stats/usage_stats.dart';
 
+import 'foreground_replay.dart';
 import 'models.dart';
 
 /// 读取手机使用情况（需要用户在系统设置里授予「使用情况访问权限」）
@@ -126,16 +127,25 @@ class UsageService {
         intervalType: IntervalType.daily,
       );
 
+      // 关键：queryUsageStats 会返回**多条**记录：
+      //   1) 同一个包在同一天可能被拆成多段（要累加）
+      //   2) 还会带上**昨天/更早**的桶（不能算进来）
+      //
+      // 所以：累加"最近一次使用 >= 今天 0 点"的桶，其余丢弃。
       final acc = <String, int>{};
       for (final s in stats) {
         final pkg = s.packageName;
-        final ms = s.totalTimeInForegroundMs;
-        if (pkg == null || ms == null || ms <= 0) continue;
-        // 和「健康使用设备」一致：不算桌面 / 系统 UI
-        if (_isShell(pkg)) continue;
+        if (pkg == null || _isShell(pkg)) continue;
+
+        final ms = s.totalTimeInForegroundMs ?? 0;
+        if (ms <= 0) continue;
+
+        final last = s.lastTimestampDate;
+        // 最近一次使用早于今天 0 点 → 是昨天或更早的桶
+        if (last != null && last.isBefore(start)) continue;
+
         acc[pkg] = (acc[pkg] ?? 0) + ms;
       }
-
       final totalMs = acc.values.fold<int>(0, (a, b) => a + b);
       final sorted = acc.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
@@ -171,6 +181,7 @@ class UsageService {
     required DateTime since,
     int limit = 8,
     int minSeconds = 60,
+    Duration lookback = const Duration(hours: 6),
   }) async {
     if (!await hasPermission()) return [];
     final now = DateTime.now();
@@ -178,56 +189,33 @@ class UsageService {
 
     try {
       await _ensureNames();
-      final events = await UsageStats.queryEvents(since, now);
 
-      final evs = <(DateTime, String?, int)>[];
+      // 往前多看一段：捕捉"窗口开始时就已经在前台"的会话
+      // （replay 会把它们裁剪到窗口起点）
+      final events = await UsageStats.queryEvents(
+        since.subtract(lookback),
+        now,
+      );
+
+      final fg = <FgEvent>[];
       for (final e in events) {
         final t = e.timeStampDate;
         final ty = e.eventTypeValue;
-        if (t == null || ty == null) continue;
-        evs.add((t, e.packageName, ty));
-      }
-      evs.sort((a, b) => a.$1.compareTo(b.$1));
-
-      final acc = <String, int>{};
-      final open = <String, DateTime>{};
-
-      void settle(String pkg, DateTime at) {
-        final st = open.remove(pkg);
-        if (st == null) return;
-        final s = st.isBefore(since) ? since : st;
-        final e = at.isAfter(now) ? now : at;
-        if (e.isAfter(s)) {
-          acc[pkg] = (acc[pkg] ?? 0) + e.difference(s).inMilliseconds;
+        final pkg = e.packageName;
+        if (t == null || ty == null || pkg == null) continue;
+        if (_isShell(pkg)) continue;
+        if (ty == 1) {
+          fg.add(FgEvent(pkg, e.className, FgEventType.resumed, t));
+        } else if (ty == 2 || ty == 23) {
+          fg.add(FgEvent(pkg, e.className, FgEventType.pausedOrStopped, t));
         }
       }
+      fg.sort((a, b) => a.at.compareTo(b.at));
 
-      void settleAll(DateTime at) {
-        for (final pkg in open.keys.toList()) {
-          settle(pkg, at);
-        }
-      }
+      // 纯函数还原（有 13 个边界测试兜底）
+      final totals = ForegroundReplay.replay(fg, since, now);
 
-      for (final (t, pkg, ty) in evs) {
-        switch (ty) {
-          case 1: // ACTIVITY_RESUMED
-            if (pkg == null || _isShell(pkg)) break;
-            open.putIfAbsent(pkg, () => t); // 保留最早的开始
-            break;
-          case 2: // ACTIVITY_PAUSED
-          case 23: // ACTIVITY_STOPPED
-            if (pkg != null) settle(pkg, t);
-            break;
-          case 16: // SCREEN_NON_INTERACTIVE 熄屏
-          case 17: // KEYGUARD_SHOWN 锁屏
-          case 26: // DEVICE_SHUTDOWN 关机
-            settleAll(t);
-            break;
-        }
-      }
-      settleAll(now); // 收尾
-
-      final raw = acc.entries
+      final raw = totals.entries
           .where((e) => e.value >= minSeconds * 1000)
           .toList()
         ..sort((a, b) => b.value.compareTo(a.value));
@@ -242,11 +230,10 @@ class UsageService {
         );
       }).toList();
     } catch (e) {
-      debugPrint('[selfgrow] usage events failed: $e');
+      debugPrint('[selfgrow] usage replay failed: $e');
       return [];
     }
   }
-
   /// 用事件流算总时长（交叉校验用）
   static Future<Duration> totalByEvents({required DateTime since}) async {
     final list = await recentExact(since: since, limit: 400, minSeconds: 1);

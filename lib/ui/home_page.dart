@@ -412,16 +412,15 @@ class _CommentSheetState extends State<_CommentSheet> {
     final since = GameStore.dayStart();
     final hasPerm = await UsageService.hasPermission();
 
-    // 口径 A：系统天级值 —— 和「健康使用设备」同源同口径，总账用它
-    final sys = await UsageService.systemToday();
-    var usage = sys.apps;
-    Duration? totalScreen = sys.total == Duration.zero ? null : sys.total;
-
-    // 系统值拿不到时，退回事件流兜底
-    if (usage.isEmpty && hasPerm) {
+    // 唯一事实源：事件回放（纯函数，13 个边界测试兜底）
+    // 不用 queryUsageStats 的桶 —— 它会把昨天/更早的数据和
+    // "同一天被拆成多段"混在一起，无法区分（见 CSDN 那篇的分析）。
+    var usage = <AppUsageBrief>[];
+    Duration? totalScreen;
+    if (hasPerm) {
       usage = await UsageService.recentExact(since: since, limit: 8);
-      final byEvents = await UsageService.totalByEvents(since: since);
-      totalScreen = byEvents == Duration.zero ? null : byEvents;
+      final total = await UsageService.totalByEvents(since: since);
+      totalScreen = total == Duration.zero ? null : total;
     }
 
     final c = await AiService.dailyComment(
